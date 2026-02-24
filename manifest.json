@@ -1,0 +1,56 @@
+{
+    "manifest_version": 3,
+    "name": "Kronos-ADO Integration",
+    "version": "1.0.0",
+    "description": "Integrates Kronos timecard with Azure DevOps task tracking.",
+    "permissions": ["storage", "tabs"],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'"
+    },
+    "content_scripts": [
+        {
+            "matches": ["https://stateofohiodas-sso.prd.mykronos.com/timekeeping"],
+            "js": ["contentScript.js"],
+            "run_at": "document_idle",
+            "all_frames": true
+        }
+    ],
+    "icons": {
+        "16": "icons/icon16.png",
+        "32": "icons/icon32.png",
+        "48": "icons/icon48.png",
+        "128": "icons/icon128.png"
+    },
+    "action": {
+        "default_title": "Toggle Timecard Sidebar",
+        "default_icon": {
+            "48": "icons/icon48.png"
+        }
+    },
+    "background": {
+        "service_worker": "background.js"
+    },
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "src/timecard-sidebar.html",
+                "lib/toastify.min.js",
+                "lib/toastify.min.css",
+                "src/timecard-sidebar.js",
+                "src/ui/copy-grid.js",
+                "src/config.js",
+                "src/utils.js",
+                "src/storage.js",
+                "src/ado/index.js",
+                "src/ado/api-client.js",
+                "src/ado/hours-sync.js",
+                "src/ado/utils.js",
+                "src/ui/time-grid.js",
+                "src/ui/task-tree.js",
+                "src/ui/modals.js",
+                "src/ui/config-panel.js"
+            ],
+            "matches": ["https://stateofohiodas-sso.prd.mykronos.com/*"]
+        }
+    ]
+}

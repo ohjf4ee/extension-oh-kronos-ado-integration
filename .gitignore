@@ -1,0 +1,12 @@
+# Dependency directories
+node_modules/
+
+# Editor swap files
+*~
+.*.sw?
+*.swp
+*.swo
+
+# Build outputs
+build/
+dist/

@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Kronos-ADO integration</title>
+        <link rel="stylesheet" href="../lib/toastify.min.css">
+        <style>
+            /* Override toast close button styling for visibility and positioning */
+            .toastify {
+                position: fixed !important;
+                padding-right: 30px !important; /* Make room for close button */
+            }
+            .toast-close {
+                position: absolute !important;
+                top: 5px !important;
+                right: 5px !important;
+                color: #000000 !important;
+                opacity: 0.7 !important;
+                font-size: 1.2em !important;
+                padding: 2px 6px !important;
+            }
+            .toast-close:hover {
+                opacity: 1 !important;
+            }
+            body {
+                font-family: sans-serif;
+                padding: 10px;
+            }
+
+            label {
+                display: block;
+                margin-top: 10px;
+            }
+
+            input[type="text"],
+            input[type="password"],
+            input[type="number"] {
+                width: 100%;
+                padding: 4px;
+            }
+            input[type="radio"] {
+                width: auto;
+            }
+
+            .config-line {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                margin-top: 4px;
+            }
+
+            .config-line label {
+                margin-top: 0;
+                white-space: nowrap;
+            }
+
+            .config-line input,
+            .config-line button {
+                margin-top: 0;
+            }
+
+            .status {
+                margin-top: 10px;
+                font-size: 0.9em;
+            }
+
+            #pat-label,
+            #pat-input,
+            #save-config-btn {
+                display: none;
+            }
+            #save-config-btn {
+                white-space: nowrap;
+            }
+
+            #config-section {
+                padding: 5px;
+                margin: 0px 0px 30px;
+                border: black 1px solid;
+                background-color: lightgrey;
+            }
+
+            #config-section > div {
+                border: 1px solid #000;
+                background: #eee;
+                padding: 1em;
+                margin-top: .5em;
+                margin-bottom: 1.5em;
+            }
+
+            .period-button {
+                padding: 2px 6px;
+                font-size: 14px;
+                line-height: 1;
+                height: auto;
+                width: auto;
+                margin-top: 0;
+            }
+            #time-grid {
+                margin-top: 15px;
+                font-size: 0.9em;
+            }
+
+            #time-grid table {
+                width: 100%;
+                border-collapse: collapse;
+                border-spacing: 0 4px;
+            }
+
+            #time-grid table tbody .day-group-even {
+                background-color: #efefef;
+            }
+
+            #time-grid th,
+            #time-grid td {
+                padding: 6px;
+                border-bottom: 1px solid #ccc;
+                text-align: center;
+                vertical-align: middle;
+            }
+
+            #time-grid th.taskCol,
+            #time-grid td.taskCol {
+                text-align: left;
+            }
+
+            #time-grid td.taskCell {
+                text-align: right; /* Right-align the cell content */
+                position: relative;
+                direction: rtl; /* Right-to-left direction for right-anchored dropdown */
+            }
+
+            /* Task dropdown styling - span the full width of the 4 task columns */
+            #time-grid td.taskCell select {
+                width: 100%; /* Take full width of the cell (which spans 4 columns) */
+                min-width: 400px; /* Ensure minimum width spans the 4 columns */
+                text-align: left; /* Keep text left-aligned inside the select */
+                direction: ltr; /* Override RTL for the select content */
+                box-sizing: border-box;
+            }
+
+            #time-grid input.hour-input {
+                width: 9ch;
+                text-align: center;
+                appearance: textfield;
+                -moz-appearance: textfield;
+            }
+            #time-grid input.hour-input::-webkit-inner-spin-button,
+            #time-grid input.hour-input::-webkit-outer-spin-button {
+                -webkit-appearance: none;
+                margin: 0;
+            }
+
+            #time-grid td.task-btn-cell {
+                text-align: left;
+                vertical-align: middle;
+            }
+            
+            #time-grid button {
+                font-size: 0.8em;
+            }
+
+            .copy-tasks-btn {
+                margin-right: 6px;
+            }
+
+            .add-task-btn {
+                margin-right: 6px;
+            }
+
+            .fill-hours-btn {
+                font-size: 1em;
+                padding: 0 4px;
+                line-height: 1;
+                background: transparent;
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                cursor: pointer;
+            }
+
+            .fill-hours-btn:hover:not(:disabled) {
+                background: #e0e0e0;
+            }
+
+            .fill-hours-btn:disabled {
+                opacity: 0.3;
+                cursor: default;
+            }
+
+            .inline-editor-row td {
+                background: #f9f9f9;
+                padding: 10px;
+            }
+
+            .alloc-diff-na {
+                color: black;
+                font-weight: lighter;
+            }
+
+            .alloc-diff-over {
+                color: red;
+                font-weight: bold;
+            }
+
+            .alloc-diff-under {
+                color: #cc7000;
+                font-weight: bold;
+            }
+
+            .day-status {
+                text-align: left;
+                font-size: 0.85em;
+                margin-left: 8px;
+                display: inline-block;
+            }
+
+            .allocation-entry {
+                margin-top: 4px;
+                font-size: 0.85em;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+            }
+
+            .allocation-entry span {
+                margin-right: 6px;
+            }
+
+            .allocation-entry button {
+                margin-left: 6px;
+                font-size: 0.8em;
+            }
+
+            .inline-form {
+                margin-top: 6px;
+                font-size: 0.85em;
+            }
+
+            .inline-form select,
+            .inline-form input {
+                margin-right: 4px;
+            }
+
+            .inline-form button {
+                margin-right: 4px;
+                font-size: 0.85em;
+            }
+
+            #add-task-modal {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0,0,0,0.5);
+                display: none;
+                padding: 3.75vh 3.75vw;
+                box-sizing: border-box;
+                z-index: 2000;
+                overflow: auto;
+            }
+            #add-task-modal .modal-content {
+                background: #fff;
+                border: 1px solid #000;
+                padding: 0;
+                width: 100%;
+                height: 100%;
+                box-sizing: border-box;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+            }
+            #add-task-modal .modal-title {
+                font-size: 1.1em;
+                margin: 0;
+                color: #fff;
+                padding: 8px 12px;
+                background-image: linear-gradient(90deg, var(--zed_sys_color_brandColorPrimary, #16488A) 0%, var(--zed_sys_color_brandColorPrimary_lowEmphasis, #216DD1) 60%, var(--zed_sys_color_brandColorPrimary, #16488A) 100%);
+            }
+            #add-task-modal .modal-body {
+                flex: 1;
+                padding: 16px;
+                overflow: auto;
+            }
+            #add-task-modal select,
+            #add-task-modal button {
+                width: auto;
+                margin-top: 8px;
+            }
+            #add-task-modal input[type="text"] {
+                width: 100%;
+                box-sizing: border-box;
+                margin-top: 8px;
+            }
+            #add-task-modal label {
+                margin-bottom: 4px;
+                display: block;
+            }
+            td.task-btn-cell button.copy-tasks-btn, td.task-btn-cell button.add-task-btn {
+                background-color: transparent;
+            }
+        </style>
+    </head>
+    <body>
+        <details id="config-section">
+            <summary id="config-summary">ADO Org: <span id="org-name"></span></summary>
+            <div>
+                <p>Set up a connection to ADO:</p>
+                <div class="config-line">
+                    <label for="org-url-input">1. Enter any ADO URL for your organization:&nbsp;</label>
+                    <input type="text" id="org-url-input" placeholder="https://dev.azure.com/..." />
+                </div>
+                <div class="config-line">
+                    <label id="pat-label" for="pat-input">2. <a id="open-pat-page-link" href="#" target="_blank">Open PAT page</a>, create one with access to "Work Items (Read &amp; write)", copy-paste to here, and save:&nbsp;</label>
+                    <input type="password" id="pat-input" placeholder="Paste the PAT here" />
+               </div>
+                <div class="config-line" id="consent-line" style="display: none; margin-top: 8px;">
+                    <input type="checkbox" id="consent-checkbox" />
+                    <label id="consent-label" for="consent-checkbox" style="display: inline; margin-top: 0;"></label>
+                </div>
+                <div class="config-line" style="margin-top: 8px;">
+                    <button id="save-config-btn">Save</button>
+                </div>
+                <div class="status" id="status-msg">No ADO connection set.</div>
+                <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #ccc;">
+                    <button id="clear-data-btn" style="background: #dc3545; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">Clear All Data</button>
+                    <span style="margin-left: 8px; font-size: 0.85em; color: #666;">Delete all saved credentials and timecard data</span>
+                </div>
+            </div>
+        </details>
+
+        <div id="period-selector" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; margin-top: 1.5em">
+            <div style="display: inline-flex; align-items: center; gap: 6px">
+                <button id="prev-period-btn" class="period-button">&lt;</button>
+                <span id="period-display" style="white-space: nowrap"></span>
+                <button id="next-period-btn" class="period-button">&gt;</button>
+                <button id="refresh-grid-btn" class="period-button">&#8635;</button>
+            </div>
+            <div style="display: inline-flex; align-items: center; gap: 6px">
+                <button id="copy-grid-btn" class="period-button" title="Copy grid to clipboard">Copy</button>
+                <button id="copy-pivot-btn" class="period-button" title="Copy pivoted grid to clipboard">Copy Pivot</button>
+            </div>
+        </div>
+
+        <div id="time-grid"></div>
+
+        <div id="add-task-modal" class="modal" style="display:none;">
+            <div class="modal-content">
+                <div class="modal-title" style="font-weight:bold;">Add New Task</div>
+                <div class="modal-body">
+                    <div id="add-task-selected" style="margin-bottom:12px;font-weight:bold;"></div>
+                    <div id="add-task-step"></div>
+                </div>
+            </div>
+        </div>
+
+        <script src="../lib/toastify.min.js"></script>
+        <script src="ui/copy-grid.js"></script>
+        <script type="module" src="timecard-sidebar.js"></script>
+    </body>
+</html>
