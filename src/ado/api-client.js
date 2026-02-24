@@ -712,4 +712,111 @@ export class AdoApiClient {
             return "";
         }
     }
+
+    /**
+     * Find tasks with hours-tracking comments for recovery purposes.
+     *
+     * When local storage is cleared, this method searches ADO for tasks that have
+     * hours-tracking comments (created by this extension) so the allocation data
+     * can be reconstructed.
+     *
+     * Strategy:
+     * 1. Query tasks assigned to current user that were changed recently
+     * 2. For each task, fetch comments and check for hours tables
+     * 3. Return tasks that have hours data in their comments
+     *
+     * @param {number} daysBack - How many days to search back (default 14 = one pay period)
+     * @returns {Promise<Array<{taskId: number, project: string, commentText: string}>>}
+     */
+    async findRecentHoursComments(daysBack = 14) {
+        const auth = await this._getAuthenticationHeaders();
+        if (!auth) {
+            console.warn(this.logPrefix + "Missing auth for findRecentHoursComments");
+            return [];
+        }
+
+        try {
+            // Query tasks assigned to me that were changed within the lookback period.
+            // We include Done tasks because hours may have been logged before completion.
+            const workItemQuery = `
+                SELECT [System.Id], [System.Title], [System.TeamProject]
+                FROM WorkItems
+                WHERE [System.WorkItemType] = 'Task'
+                AND [System.AssignedTo] = @Me
+                AND [System.ChangedDate] >= @Today - ${daysBack}
+                ORDER BY [System.ChangedDate] DESC`;
+
+            const response = await fetch(`${this.orgUrl}/_apis/wit/wiql?api-version=7.0`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    ...auth.headers
+                },
+                body: JSON.stringify({ query: workItemQuery }),
+            });
+
+            if (!response.ok) {
+                console.error(`${this.logPrefix}WIQL query failed: ${response.status}`);
+                return [];
+            }
+
+            const data = await response.json();
+            if (!data.workItems?.length) {
+                console.debug(`${this.logPrefix}No tasks found in last ${daysBack} days`);
+                return [];
+            }
+
+            // Limit to first 50 tasks to avoid excessive API calls
+            const taskIds = data.workItems.map(wi => wi.id).slice(0, 50);
+            console.debug(`${this.logPrefix}Found ${taskIds.length} tasks to check for hours comments`);
+
+            // Fetch basic details for all tasks (we need project name for comment API)
+            const detailsResponse = await fetch(
+                `${this.orgUrl}/_apis/wit/workitems?ids=${taskIds.join(',')}&fields=System.Id,System.Title,System.TeamProject&api-version=7.0`,
+                { headers: auth.headers }
+            );
+
+            if (!detailsResponse.ok) {
+                console.error(`${this.logPrefix}Failed to fetch task details: ${detailsResponse.status}`);
+                return [];
+            }
+
+            const detailsData = await detailsResponse.json();
+            const taskMap = new Map(
+                detailsData.value.map(wi => [wi.id, {
+                    id: wi.id,
+                    title: wi.fields["System.Title"],
+                    project: wi.fields["System.TeamProject"]
+                }])
+            );
+
+            // For each task, fetch comments and look for hours tables.
+            // We import findHoursComment dynamically to avoid circular dependency issues.
+            const { findHoursComment } = await import('./utils.js');
+
+            const results = [];
+            for (const taskId of taskIds) {
+                const task = taskMap.get(taskId);
+                if (!task) continue;
+
+                const comments = await this.getWorkItemComments(task.project, taskId);
+                const hoursComment = findHoursComment(comments);
+
+                if (hoursComment) {
+                    results.push({
+                        taskId: task.id,
+                        project: task.project,
+                        commentText: hoursComment.comment.text
+                    });
+                }
+            }
+
+            console.debug(`${this.logPrefix}Found ${results.length} tasks with hours comments`);
+            return results;
+
+        } catch (error) {
+            console.error(`${this.logPrefix}Error in findRecentHoursComments:`, error);
+            return [];
+        }
+    }
 }

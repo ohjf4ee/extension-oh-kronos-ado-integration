@@ -204,3 +204,86 @@ export async function extractDailyHoursFromTask({ adoApi, taskId, project, descr
         return {};
     }
 }
+
+/**
+ * Recover allocations from ADO comments when local storage is empty.
+ *
+ * This function is called when the extension detects that local storage has no
+ * allocation data (e.g., after clearing data or installing on a new machine).
+ * It searches ADO for tasks with hours-tracking comments and reconstructs the
+ * allocations-by-day structure.
+ *
+ * @param {Object} params - Parameters object
+ * @param {Object} params.adoApi - AdoApiClient instance
+ * @param {number} params.daysBack - Days to search back (default 14 = one pay period)
+ * @returns {Promise<{allocations: Object, tasksFound: number}>}
+ *   - allocations: Object keyed by date (YYYY-MM-DD) with arrays of allocation objects
+ *   - tasksFound: Number of tasks that had recoverable hours data
+ */
+export async function recoverAllocationsFromAdo({ adoApi, daysBack = 14 }) {
+    if (!adoApi) {
+        console.warn(LOG_PREFIX + "No adoApi provided for recovery");
+        return { allocations: {}, tasksFound: 0 };
+    }
+
+    console.debug(LOG_PREFIX + `Starting allocation recovery (${daysBack} days back)...`);
+
+    try {
+        // Find all tasks with hours-tracking comments
+        const tasksWithComments = await adoApi.findRecentHoursComments(daysBack);
+
+        if (tasksWithComments.length === 0) {
+            console.debug(LOG_PREFIX + "No tasks with hours comments found for recovery");
+            return { allocations: {}, tasksFound: 0 };
+        }
+
+        // Build allocations object from the recovered comments.
+        // Structure: { "YYYY-MM-DD": [ {taskId, hours, confirmed, source}, ... ] }
+        const allocations = {};
+
+        for (const { taskId, commentText } of tasksWithComments) {
+            // Parse the hours table from the comment HTML
+            const dailyHours = adoUtils.extractDailyHoursFromHtml(commentText, taskId);
+
+            // Add each date's hours to the allocations structure
+            for (const [dateStr, hours] of Object.entries(dailyHours)) {
+                if (hours <= 0) continue;
+
+                if (!allocations[dateStr]) {
+                    allocations[dateStr] = [];
+                }
+
+                // Check if this task is already in the day's allocations (shouldn't happen, but be safe)
+                const existingIndex = allocations[dateStr].findIndex(
+                    a => String(a.taskId) === String(taskId)
+                );
+
+                if (existingIndex >= 0) {
+                    // Update existing entry (take the higher value)
+                    allocations[dateStr][existingIndex].hours = Math.max(
+                        allocations[dateStr][existingIndex].hours,
+                        hours
+                    );
+                } else {
+                    // Add new allocation entry
+                    allocations[dateStr].push({
+                        taskId,
+                        hours,
+                        confirmed: true,
+                        source: 'ado'  // Mark as recovered from ADO
+                    });
+                }
+            }
+        }
+
+        const tasksFound = tasksWithComments.length;
+        const datesRecovered = Object.keys(allocations).length;
+        console.debug(LOG_PREFIX + `Recovery complete: ${tasksFound} tasks, ${datesRecovered} dates`);
+
+        return { allocations, tasksFound };
+
+    } catch (error) {
+        console.error(LOG_PREFIX + "Error during allocation recovery:", error);
+        return { allocations: {}, tasksFound: 0 };
+    }
+}

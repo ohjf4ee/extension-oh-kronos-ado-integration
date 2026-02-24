@@ -4,7 +4,7 @@
 import { CONFIG } from '../config.js';
 import * as utils from '../utils.js';
 import * as storage from '../storage.js';
-import { updateTaskHours, syncAllocationsWithAdo as syncWithAdo } from '../ado/hours-sync.js';
+import { updateTaskHours, syncAllocationsWithAdo as syncWithAdo, recoverAllocationsFromAdo } from '../ado/hours-sync.js';
 
 /**
  * Create a time grid controller with event delegation
@@ -646,6 +646,18 @@ export function createTimeGrid(container, dependencies) {
         // Load data from storage
         state.hoursByDay = (await storage.loadLocal(CONFIG.STORAGE_KEYS.HOURS_BY_DAY)) || {};
         state.allocations = (await storage.loadLocal(CONFIG.STORAGE_KEYS.ALLOCATIONS_BY_DAY)) || {};
+
+        // Recovery check: If allocations are completely empty, try to recover from ADO comments.
+        // This handles the case when local storage is cleared or on first load with a new PAT.
+        const hasAnyAllocations = Object.values(state.allocations).some(day => day && day.length > 0);
+        if (!hasAnyAllocations && adoApi) {
+            const recovery = await recoverAllocationsFromAdo({ adoApi, daysBack: 14 });
+            if (recovery.tasksFound > 0) {
+                state.allocations = recovery.allocations;
+                await storage.saveLocal(CONFIG.STORAGE_KEYS.ALLOCATIONS_BY_DAY, state.allocations);
+                showSyncNotification(`Recovered ${recovery.tasksFound} task(s) from ADO`, 'success');
+            }
+        }
 
         // Ensure task metadata is loaded
         if (adoApi) {

@@ -3,4 +3,4 @@
 
 export { AdoApiClient, createAdoHeaders } from './api-client.js';
 export * as adoUtils from './utils.js';
-export { updateTaskHours, syncAllocationsWithAdo, extractDailyHoursFromTask } from './hours-sync.js';
+export { updateTaskHours, syncAllocationsWithAdo, extractDailyHoursFromTask, recoverAllocationsFromAdo } from './hours-sync.js';
