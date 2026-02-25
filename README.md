@@ -97,7 +97,6 @@ This extension requests minimal permissions required for its functionality:
 | Permission | Justification                                                                                                     |
 |------------|-------------------------------------------------------------------------------------------------------------------|
 | `storage`  | Store user settings (ADO org URL) and timecard data locally in the browser. No data is sent to external servers. |
-| `tabs`     | Open the Azure DevOps PAT creation page in a new tab when the user clicks "Open PAT page".                        |
 
 ### Content Script Scope
 
