@@ -218,9 +218,217 @@ export function createTaskTreeSelector(dependencies) {
             }
         }
 
+        // Helper: render PBI nodes into a container
+        // Extracted to allow lazy loading of PBIs
+        function renderPbiNodes(pbis, pbiList, project) {
+            for (const pbi of pbis) {
+                const pbiWrapper = document.createElement("div");
+                const pbiHeaderElement = document.createElement("div");
+                pbiHeaderElement.setAttribute("role", "treeitem");
+                pbiHeaderElement.setAttribute("aria-level", "2");
+                pbiHeaderElement.style.display = "flex";
+                pbiHeaderElement.style.alignItems = "center";
+                pbiHeaderElement.style.justifyContent = "space-between";
+                pbiHeaderElement.style.margin = "4px 0";
+                pbiHeaderElement.style.cursor = "pointer";
+
+                const pbiLeftContent = document.createElement("div");
+                pbiLeftContent.style.display = "flex";
+                pbiLeftContent.style.alignItems = "center";
+
+                const pbiExpandIcon = document.createElement("span");
+                pbiExpandIcon.style.display = 'inline-block';
+                pbiExpandIcon.style.width = '12px';
+                pbiExpandIcon.style.marginRight = '8px';
+
+                const pbiTitleElement = document.createElement("span");
+                const pbiIdHyperlink = document.createElement("a");
+                pbiIdHyperlink.href = `${orgUrl}/_workitems/edit/${pbi.id}`;
+                pbiIdHyperlink.target = "_blank";
+                pbiIdHyperlink.textContent = `${pbi.id}`;
+                const pbiTextAfter = document.createTextNode(` > ${pbi.title}`);
+                pbiTitleElement.append(pbiIdHyperlink, pbiTextAfter);
+
+                const pbiTaskCount = document.createElement("span");
+                pbiTaskCount.textContent = " (...)";
+                pbiTaskCount.style.color = "#555";
+                pbiTaskCount.style.marginLeft = "8px";
+
+                const createTaskButton = document.createElement("a");
+                createTaskButton.textContent = "+";
+                createTaskButton.title = "Create New Task";
+                createTaskButton.style.cursor = "pointer";
+                createTaskButton.style.fontSize = "1.2em";
+                createTaskButton.style.fontWeight = "bold";
+                createTaskButton.style.color = "#007acc";
+                createTaskButton.style.textDecoration = "none";
+                createTaskButton.style.marginLeft = "8px";
+
+                pbiLeftContent.append(pbiExpandIcon, pbiTitleElement, pbiTaskCount, createTaskButton);
+
+                const pbiButtonContainer = document.createElement("div");
+                pbiButtonContainer.style.display = "flex";
+                pbiButtonContainer.style.gap = "4px";
+                pbiButtonContainer.style.flexShrink = "0";
+
+                const pbiDoneButton = document.createElement("button");
+                pbiDoneButton.textContent = "Done?";
+                pbiDoneButton.style.fontSize = "0.85em";
+                pbiDoneButton.onclick = async (event) => {
+                    event.stopPropagation();
+                    await handleMarkAsDone(pbi.id, pbi.title, 'PBI', project.name);
+                };
+
+                pbiButtonContainer.append(pbiDoneButton);
+                pbiHeaderElement.append(pbiLeftContent, pbiButtonContainer);
+                pbiWrapper.appendChild(pbiHeaderElement);
+
+                const taskList = document.createElement("div");
+                taskList.setAttribute("role", "group");
+                taskList.style.marginLeft = "48px";
+                taskList.style.display = "none";
+
+                async function ensureTasksRendered() {
+                    if (taskList.dataset.loaded === '1') return;
+                    const allTasks = (await adoApi.loadTasks(false, showErrorStatus)).filter(task => task.project === project.name && task.parentId === pbi.id);
+                    const tasks = allTasks.length ? allTasks : (await adoApi.loadTasks(false, showErrorStatus)).filter(task => task.project === project.name && task.pbiTitle === pbi.title);
+                    const taskSortKey = (task) => ({
+                        priority: Number(task.priority ?? Infinity),
+                        backlog: Number(task.backlogPriority ?? Infinity),
+                        title: task.title || ''
+                    });
+                    tasks.sort((taskA, taskB) => {
+                        const sortKeyA = taskSortKey(taskA), sortKeyB = taskSortKey(taskB);
+                        if (sortKeyA.priority !== sortKeyB.priority) return sortKeyA.priority - sortKeyB.priority;
+                        if (sortKeyA.backlog !== sortKeyB.backlog) return sortKeyA.backlog - sortKeyB.backlog;
+                        return sortKeyA.title.localeCompare(sortKeyB.title);
+                    });
+                    pbiTaskCount.textContent = ` (${tasks.length})`;
+                    tasks.forEach(task => {
+                        const taskListItem = document.createElement("div");
+                        taskListItem.setAttribute("role", "treeitem");
+                        taskListItem.setAttribute("aria-level", "3");
+                        taskListItem.style.display = "flex";
+                        taskListItem.style.alignItems = "center";
+                        taskListItem.style.justifyContent = "space-between";
+                        taskListItem.style.padding = "2px 0";
+
+                        const alreadyAddedToDay = taskIdsAlreadyOnDay.has(String(task.id));
+
+                        const taskLeftContent = document.createElement("div");
+                        if (alreadyAddedToDay) {
+                            taskLeftContent.style.opacity = "0.5";
+                            taskLeftContent.title = "This task is already added to this day";
+                        }
+                        const taskIdLink = document.createElement("a");
+                        taskIdLink.href = `${orgUrl}/_workitems/edit/${task.id}`;
+                        taskIdLink.target = "_blank";
+                        taskIdLink.textContent = `${task.id}`;
+                        const taskTitleText = document.createTextNode(` > ${task.title}`);
+                        taskLeftContent.append(taskIdLink, taskTitleText);
+
+                        const buttonContainer = document.createElement("div");
+                        buttonContainer.style.display = "flex";
+                        buttonContainer.style.gap = "4px";
+
+                        const addButton = document.createElement("button");
+                        addButton.textContent = "Add";
+                        addButton.style.fontSize = "0.85em";
+                        addButton.disabled = alreadyAddedToDay;
+                        if (alreadyAddedToDay) {
+                            addButton.title = "This task is already added to this day";
+                        }
+                        addButton.onclick = (event) => {
+                            event.stopPropagation();
+                            selectTask(task.id);
+                        };
+
+                        const doneButton = document.createElement("button");
+                        doneButton.textContent = "Done?";
+                        doneButton.style.fontSize = "0.85em";
+                        doneButton.onclick = async (event) => {
+                            event.stopPropagation();
+                            await handleMarkAsDone(task.id, task.title, 'Task', project.name);
+                        };
+
+                        buttonContainer.append(addButton, doneButton);
+
+                        taskListItem.onclick = (event) => {
+                            if (alreadyAddedToDay || event.target === taskIdLink || event.target.tagName === 'BUTTON') return;
+                            selectTask(task.id);
+                        };
+                        taskListItem.append(taskLeftContent, buttonContainer);
+                        taskList.appendChild(taskListItem);
+                    });
+                    taskList.dataset.loaded = '1';
+                }
+
+                createTaskButton.onclick = async () => {
+                    let step = 0;
+                    let taskTitle = null;
+                    let activity = null;
+
+                    while (step >= 0) {
+                        if (step === 0) {
+                            taskTitle = await modalHelpers.getTaskTitle(project.name, `${pbi.id} > ${pbi.title}`, null);
+                            if (!taskTitle) { await renderAllProjects(); return; }
+                            if (taskTitle.prev) { await renderAllProjects(); return; }
+                            step = 1;
+                        } else if (step === 1) {
+                            activity = await modalHelpers.chooseActivity(project.name, authHeader);
+                            if (activity === null) { await renderAllProjects(); return; }
+                            if (activity.prev) { step = 0; continue; }
+                            step = 2;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    const assignTo = await adoApi.getCurrentUser(authHeader);
+                    const taskId = await adoApi.createWorkItem(project.name, "Task", [
+                        { op: "add", path: "/fields/System.Title", value: taskTitle.title },
+                        { op: "add", path: "/fields/Microsoft.VSTS.Common.Priority", value: 4 },
+                        { op: "add", path: "/fields/Custom.ODHActivity", value: activity },
+                        { op: "add", path: "/fields/System.AssignedTo", value: assignTo },
+                        { op: "add", path: "/relations/-", value: { rel: "System.LinkTypes.Hierarchy-Reverse", url: `${orgUrl}/_apis/wit/workItems/${pbi.id}` } }
+                    ], authHeader);
+                    await renderAllProjects();
+                    selectTask(taskId);
+                };
+
+                pbiWrapper.appendChild(taskList);
+                pbiList.appendChild(pbiWrapper);
+
+                const initialPbiExpanded = isPbiExpanded(project.name, pbi.id);
+                setChevron(pbiExpandIcon, false, true);
+                taskList.style.display = initialPbiExpanded ? '' : 'none';
+                if (initialPbiExpanded) {
+                    ensureTasksRendered().then(() => {
+                        const hasTasks = taskList.querySelector('[role="treeitem"]') !== null;
+                        setChevron(pbiExpandIcon, hasTasks ? initialPbiExpanded : false, hasTasks);
+                    });
+                }
+
+                pbiHeaderElement.onclick = async (event) => {
+                    if (event.target.tagName === 'A') return;
+                    const nowExpanded = taskList.style.display === 'none';
+                    taskList.style.display = nowExpanded ? '' : 'none';
+                    await setPbiExpanded(project.name, pbi.id, nowExpanded);
+                    if (nowExpanded) {
+                        await ensureTasksRendered();
+                        const hasTasks = taskList.querySelector('[role="treeitem"]') !== null;
+                        setChevron(pbiExpandIcon, hasTasks ? nowExpanded : false, hasTasks);
+                    } else {
+                        setChevron(pbiExpandIcon, false, true);
+                    }
+                };
+            }
+        }
+
         // Helper: render a single project node with its PBIs and Tasks (collapsible)
+        // PBIs are lazy-loaded only when the project is expanded
         // Returns the rendered DOM element instead of appending directly to tree
-        async function renderProjectNode(project, isFirstProject = false, appendToTree = true) {
+        function renderProjectNode(project, isFirstProject = false, appendToTree = true) {
             const projectWrapper = document.createElement("div");
             const projectHeader = document.createElement("div");
             projectHeader.setAttribute("role", "treeitem");
@@ -279,25 +487,90 @@ export function createTaskTreeSelector(dependencies) {
             projectHeader.append(projectLeftContent);
             projectWrapper.appendChild(projectHeader);
 
-            // PBIs for this project
-            let pbis = await adoApi.loadPbis(project.name, authHeader, showErrorStatus);
-            pbis = pbis.filter(pbi => pbi.project === project.name);
-            // Sort PBIs by Priority, then Backlog Priority, then Title
-            const pbiSortKey = (pbi) => ({
-                priority: Number(pbi.priority ?? Infinity),
-                backlog: Number(pbi.backlogPriority ?? Infinity),
-                title: pbi.title || ''
-            });
-            pbis.sort((pbiA, pbiB) => {
-                const sortKeyA = pbiSortKey(pbiA), sortKeyB = pbiSortKey(pbiB);
-                if (sortKeyA.priority !== sortKeyB.priority) return sortKeyA.priority - sortKeyB.priority;
-                if (sortKeyA.backlog !== sortKeyB.backlog) return sortKeyA.backlog - sortKeyB.backlog;
-                return sortKeyA.title.localeCompare(sortKeyB.title);
-            });
-            projectPbiCount.textContent = ` (${pbis.length})`;
-
+            // PBI list container - starts empty, lazy-loaded on expand
             const pbiList = document.createElement("div");
-            pbiList.style.marginLeft = "24px"; // increased indent for level 2
+            pbiList.style.marginLeft = "24px";
+            pbiList.style.display = "none";
+
+            // Track loading state
+            let pbisLoaded = false;
+            let pbisLoading = false;
+            let loadError = false;
+            let pbis = [];
+
+            // Initialize chevron as collapsed
+            setChevron(projectExpandIcon, false, true);
+
+            // Lazy load PBIs when project is expanded
+            async function ensurePbisLoaded() {
+                if (pbisLoaded) return true;
+                if (pbisLoading) return false; // Already loading, wait
+                pbisLoading = true;
+                loadError = false;
+
+                // Show loading indicator
+                projectPbiCount.textContent = " (loading...)";
+                projectPbiCount.style.fontStyle = "italic";
+
+                try {
+                    let loadedPbis = await adoApi.loadPbis(project.name, authHeader, null);
+                    loadedPbis = loadedPbis.filter(pbi => pbi.project === project.name);
+
+                    // Sort PBIs
+                    const pbiSortKey = (pbi) => ({
+                        priority: Number(pbi.priority ?? Infinity),
+                        backlog: Number(pbi.backlogPriority ?? Infinity),
+                        title: pbi.title || ''
+                    });
+                    loadedPbis.sort((pbiA, pbiB) => {
+                        const sortKeyA = pbiSortKey(pbiA), sortKeyB = pbiSortKey(pbiB);
+                        if (sortKeyA.priority !== sortKeyB.priority) return sortKeyA.priority - sortKeyB.priority;
+                        if (sortKeyA.backlog !== sortKeyB.backlog) return sortKeyA.backlog - sortKeyB.backlog;
+                        return sortKeyA.title.localeCompare(sortKeyB.title);
+                    });
+
+                    pbis = loadedPbis;
+                    pbisLoaded = true;
+                    projectPbiCount.textContent = ` (${pbis.length})`;
+                    projectPbiCount.style.fontStyle = "normal";
+                    projectPbiCount.style.color = "#555";
+
+                    // Render PBI nodes
+                    pbiList.innerHTML = "";
+                    renderPbiNodes(pbis, pbiList, project);
+
+                    // Update chevron
+                    const isExpanded = pbiList.style.display !== 'none';
+                    setChevron(projectExpandIcon, pbis.length > 0 ? isExpanded : false, pbis.length > 0);
+                    projectHeader.style.cursor = pbis.length > 0 ? 'pointer' : 'default';
+
+                    return true;
+                } catch (err) {
+                    console.error(LOG_PREFIX + `Failed to load PBIs for ${project.name}:`, err);
+                    loadError = true;
+                    pbisLoading = false;
+                    projectPbiCount.innerHTML = ` <span style="color: #c00; cursor: pointer;" title="Click to retry">(failed - retry?)</span>`;
+                    projectPbiCount.style.fontStyle = "normal";
+
+                    const retrySpan = projectPbiCount.querySelector('span');
+                    if (retrySpan) {
+                        retrySpan.onclick = async (event) => {
+                            event.stopPropagation();
+                            pbisLoading = false;
+                            loadError = false;
+                            const success = await ensurePbisLoaded();
+                            if (success && pbiList.style.display === 'none') {
+                                pbiList.style.display = '';
+                                setChevron(projectExpandIcon, pbis.length > 0, pbis.length > 0);
+                                await setProjectExpanded(project.name, true);
+                            }
+                        };
+                    }
+                    return false;
+                } finally {
+                    if (!loadError) pbisLoading = false;
+                }
+            }
 
             // Create New PBI/Bug flow with proper Previous button support
             createWorkItemButton.onclick = async () => {
@@ -388,252 +661,52 @@ export function createTaskTreeSelector(dependencies) {
                     }
                 }
             };
-            for (const pbi of pbis) {
-                const pbiWrapper = document.createElement("div");
-                const pbiHeaderElement = document.createElement("div");
-                pbiHeaderElement.setAttribute("role", "treeitem");
-                pbiHeaderElement.setAttribute("aria-level", "2");
-                pbiHeaderElement.style.display = "flex";
-                pbiHeaderElement.style.alignItems = "center";
-                pbiHeaderElement.style.justifyContent = "space-between";
-                pbiHeaderElement.style.margin = "4px 0";
-                pbiHeaderElement.style.cursor = "pointer";
-
-                const pbiLeftContent = document.createElement("div");
-                pbiLeftContent.style.display = "flex";
-                pbiLeftContent.style.alignItems = "center";
-
-                const pbiExpandIcon = document.createElement("span");
-                pbiExpandIcon.style.display = 'inline-block';
-                pbiExpandIcon.style.width = '12px';
-                pbiExpandIcon.style.marginRight = '8px';
-
-                const pbiTitleElement = document.createElement("span");
-                // Make only the PBI ID a hyperlink
-                const pbiIdHyperlink = document.createElement("a");
-                pbiIdHyperlink.href = `${orgUrl}/_workitems/edit/${pbi.id}`;
-                pbiIdHyperlink.target = "_blank";
-                pbiIdHyperlink.textContent = `${pbi.id}`;
-                const pbiTextAfter = document.createTextNode(` > ${pbi.title}`);
-                pbiTitleElement.append(pbiIdHyperlink, pbiTextAfter);
-
-                const pbiTaskCount = document.createElement("span");
-                // Use ASCII-only placeholder to avoid rendering issues
-                pbiTaskCount.textContent = " (...)";
-                pbiTaskCount.style.color = "#555";
-                pbiTaskCount.style.marginLeft = "8px";
-
-                // Create New Task (+ indicator) - inline after count
-                const createTaskButton = document.createElement("a");
-                createTaskButton.textContent = "+";
-                createTaskButton.title = "Create New Task";
-                createTaskButton.style.cursor = "pointer";
-                createTaskButton.style.fontSize = "1.2em";
-                createTaskButton.style.fontWeight = "bold";
-                createTaskButton.style.color = "#007acc";
-                createTaskButton.style.textDecoration = "none";
-                createTaskButton.style.marginLeft = "8px";
-
-                pbiLeftContent.append(pbiExpandIcon, pbiTitleElement, pbiTaskCount, createTaskButton);
-
-                // Done? button for PBI - anchored to the right
-                const pbiButtonContainer = document.createElement("div");
-                pbiButtonContainer.style.display = "flex";
-                pbiButtonContainer.style.gap = "4px";
-                pbiButtonContainer.style.flexShrink = "0";
-
-                const pbiDoneButton = document.createElement("button");
-                pbiDoneButton.textContent = "Done?";
-                pbiDoneButton.style.fontSize = "0.85em";
-                pbiDoneButton.onclick = async (event) => {
-                    event.stopPropagation();
-                    await handleMarkAsDone(pbi.id, pbi.title, 'PBI', project.name);
-                };
-
-                pbiButtonContainer.append(pbiDoneButton);
-
-                pbiHeaderElement.append(pbiLeftContent, pbiButtonContainer);
-                pbiWrapper.appendChild(pbiHeaderElement);
-
-                const taskList = document.createElement("div");
-                taskList.setAttribute("role", "group");
-                taskList.style.marginLeft = "48px"; // increased indent for level 3
-                taskList.style.display = "none";
-
-                async function ensureTasksRendered() {
-                    if (taskList.dataset.loaded === '1') return;
-                    // Load tasks for this PBI using existing loader
-                    const allTasks = (await adoApi.loadTasks(false, showErrorStatus)).filter(task => task.project === project.name && task.parentId === pbi.id);
-                    // Fallback if parentId missing in cache
-                    const tasks = allTasks.length ? allTasks : (await adoApi.loadTasks(false, showErrorStatus)).filter(task => task.project === project.name && task.pbiTitle === pbi.title);
-                    // Sort Tasks by Priority, then Backlog Priority, then Title
-                    const taskSortKey = (task) => ({
-                        priority: Number(task.priority ?? Infinity),
-                        backlog: Number(task.backlogPriority ?? Infinity),
-                        title: task.title || ''
-                    });
-                    tasks.sort((taskA, taskB) => {
-                        const sortKeyA = taskSortKey(taskA), sortKeyB = taskSortKey(taskB);
-                        if (sortKeyA.priority !== sortKeyB.priority) return sortKeyA.priority - sortKeyB.priority;
-                        if (sortKeyA.backlog !== sortKeyB.backlog) return sortKeyA.backlog - sortKeyB.backlog;
-                        return sortKeyA.title.localeCompare(sortKeyB.title);
-                    });
-                    pbiTaskCount.textContent = ` (${tasks.length})`;
-                    tasks.forEach(task => {
-                        const taskListItem = document.createElement("div");
-                        taskListItem.setAttribute("role", "treeitem");
-                        taskListItem.setAttribute("aria-level", "3");
-                        taskListItem.style.display = "flex";
-                        taskListItem.style.alignItems = "center";
-                        taskListItem.style.justifyContent = "space-between";
-                        taskListItem.style.padding = "2px 0";
-
-                        // Check if task is already added to this day
-                        const alreadyAddedToDay = taskIdsAlreadyOnDay.has(String(task.id));
-
-                        // Only the task ID is a hyperlink; the title is plain text
-                        const taskLeftContent = document.createElement("div");
-                        if (alreadyAddedToDay) {
-                            taskLeftContent.style.opacity = "0.5";
-                            taskLeftContent.title = "This task is already added to this day";
-                        }
-                        const taskIdLink = document.createElement("a");
-                        taskIdLink.href = `${orgUrl}/_workitems/edit/${task.id}`;
-                        taskIdLink.target = "_blank";
-                        taskIdLink.textContent = `${task.id}`;
-                        const taskTitleText = document.createTextNode(` > ${task.title}`);
-                        taskLeftContent.append(taskIdLink, taskTitleText);
-
-                        const buttonContainer = document.createElement("div");
-                        buttonContainer.style.display = "flex";
-                        buttonContainer.style.gap = "4px";
-
-                        const addButton = document.createElement("button");
-                        addButton.textContent = "Add";
-                        addButton.style.fontSize = "0.85em";
-                        addButton.disabled = alreadyAddedToDay;
-                        if (alreadyAddedToDay) {
-                            addButton.title = "This task is already added to this day";
-                        }
-                        addButton.onclick = (event) => {
-                            event.stopPropagation();
-                            selectTask(task.id);
-                        };
-
-                        const doneButton = document.createElement("button");
-                        doneButton.textContent = "Done?";
-                        doneButton.style.fontSize = "0.85em";
-                        doneButton.onclick = async (event) => {
-                            event.stopPropagation();
-                            await handleMarkAsDone(task.id, task.title, 'Task', project.name);
-                        };
-
-                        // Order: Add button, then Done? button (Done? on the right)
-                        buttonContainer.append(addButton, doneButton);
-
-                        // Also allow clicking the row (excluding the link and buttons) to select
-                        taskListItem.onclick = (event) => {
-                            if (alreadyAddedToDay || event.target === taskIdLink || event.target.tagName === 'BUTTON') return;
-                            selectTask(task.id);
-                        };
-                        taskListItem.append(taskLeftContent, buttonContainer);
-                        taskList.appendChild(taskListItem);
-                    });
-                    taskList.dataset.loaded = '1';
-                }
-
-                // Create New Task flow (button in header actions) with proper Previous button support
-                createTaskButton.onclick = async () => {
-                    let step = 0;
-                    let taskTitle = null;
-                    let activity = null;
-
-                    while (step >= 0) {
-                        if (step === 0) {
-                            // Step 0: Get task title
-                            taskTitle = await modalHelpers.getTaskTitle(project.name, `${pbi.id} > ${pbi.title}`, null);
-                            if (!taskTitle) { await renderAllProjects(); return; } // canceled, restore tree
-                            if (taskTitle.prev) { await renderAllProjects(); return; } // go back to tree (first step)
-                            step = 1;
-                        } else if (step === 1) {
-                            // Step 1: Choose activity
-                            activity = await modalHelpers.chooseActivity(project.name, authHeader);
-                            if (activity === null) { await renderAllProjects(); return; } // canceled, restore tree
-                            if (activity.prev) { step = 0; continue; } // go back to task title
-                            step = 2; // Done with wizard steps
-                        } else {
-                            break; // Exit the loop to proceed with creation
-                        }
-                    }
-
-                    const assignTo = await adoApi.getCurrentUser(authHeader);
-                    const taskId = await adoApi.createWorkItem(project.name, "Task", [
-                        { op: "add", path: "/fields/System.Title", value: taskTitle.title },
-                        { op: "add", path: "/fields/Microsoft.VSTS.Common.Priority", value: 4 },
-                        { op: "add", path: "/fields/Custom.ODHActivity", value: activity },
-                        { op: "add", path: "/fields/System.AssignedTo", value: assignTo },
-                        { op: "add", path: "/relations/-", value: { rel: "System.LinkTypes.Hierarchy-Reverse", url: `${orgUrl}/_apis/wit/workItems/${pbi.id}` } }
-                    ], authHeader);
-                    // Refresh tree to show newly created Task
-                    await renderAllProjects();
-                    selectTask(taskId);
-                };
-
-                pbiWrapper.appendChild(taskList);
-                pbiList.appendChild(pbiWrapper);
-
-                // Initialize PBI collapsed/expanded state
-                const initialPbiExpanded = isPbiExpanded(project.name, pbi.id);
-                // Initially we don't know if there are tasks, show chevron as collapsed (right-pointing)
-                setChevron(pbiExpandIcon, false, true);
-                taskList.style.display = initialPbiExpanded ? '' : 'none';
-                if (initialPbiExpanded) {
-                    await ensureTasksRendered();
-                    // Update chevron after loading tasks
-                    const hasTasks = taskList.querySelector('[role="treeitem"]') !== null;
-                    setChevron(pbiExpandIcon, hasTasks ? initialPbiExpanded : false, hasTasks);
-                }
-
-                pbiHeaderElement.onclick = async (event) => {
-                    // Don't toggle if clicking on a link
-                    if (event.target.tagName === 'A') return;
-                    const nowExpanded = taskList.style.display === 'none';
-                    taskList.style.display = nowExpanded ? '' : 'none';
-                    await setPbiExpanded(project.name, pbi.id, nowExpanded);
-                    if (nowExpanded) {
-                        await ensureTasksRendered();
-                        // Update chevron after loading tasks to show correct state
-                        const hasTasks = taskList.querySelector('[role="treeitem"]') !== null;
-                        setChevron(pbiExpandIcon, hasTasks ? nowExpanded : false, hasTasks);
-                    } else {
-                        // When collapsing, always show as collapsed (right-pointing)
-                        setChevron(pbiExpandIcon, false, true);
-                    }
-                };
-            }
 
             projectWrapper.appendChild(pbiList);
             if (appendToTree) {
                 tree.appendChild(projectWrapper);
             }
 
-            // Initialize project collapsed/expanded state
-            const initialProjectExpanded = isProjectExpanded(project.name);
-            // Always show chevron, grey if no children
-            // For items without children, always show as collapsed (right-pointing)
-            setChevron(projectExpandIcon, pbis.length > 0 ? initialProjectExpanded : false, pbis.length > 0);
-            projectHeader.style.cursor = pbis.length > 0 ? 'pointer' : 'default';
-            pbiList.style.display = initialProjectExpanded ? '' : 'none';
-            // Clicking header toggles only if there are children
+            // Handle project expand/collapse with lazy loading
             projectHeader.onclick = async (event) => {
-                // Don't toggle if clicking on project link
                 if (event.target.tagName === 'A') return;
-                if (pbis.length === 0) return;
+
                 const nowExpanded = pbiList.style.display === 'none';
-                setChevron(projectExpandIcon, nowExpanded, pbis.length > 0);
-                pbiList.style.display = nowExpanded ? '' : 'none';
-                await setProjectExpanded(project.name, nowExpanded);
+
+                if (nowExpanded) {
+                    // Expanding - load PBIs if not yet loaded
+                    pbiList.style.display = '';
+                    const success = await ensurePbisLoaded();
+                    if (success) {
+                        setChevron(projectExpandIcon, pbis.length > 0, pbis.length > 0);
+                        await setProjectExpanded(project.name, true);
+                    } else {
+                        // Loading failed, collapse back
+                        pbiList.style.display = 'none';
+                        setChevron(projectExpandIcon, false, true);
+                    }
+                } else {
+                    // Collapsing
+                    pbiList.style.display = 'none';
+                    setChevron(projectExpandIcon, false, pbisLoaded ? pbis.length > 0 : true);
+                    await setProjectExpanded(project.name, false);
+                }
             };
+
+            // Check if this project should be auto-expanded (was expanded before)
+            const shouldAutoExpand = isProjectExpanded(project.name);
+            if (shouldAutoExpand) {
+                // Trigger expansion asynchronously
+                pbiList.style.display = '';
+                ensurePbisLoaded().then(success => {
+                    if (success) {
+                        setChevron(projectExpandIcon, pbis.length > 0, pbis.length > 0);
+                    } else {
+                        pbiList.style.display = 'none';
+                        setChevron(projectExpandIcon, false, true);
+                    }
+                });
+            }
 
             return projectWrapper;
         }
@@ -664,55 +737,11 @@ export function createTaskTreeSelector(dependencies) {
             // Sort projects alphabetically by name
             const sortedProjects = projectsData.value.sort((projectA, projectB) => projectA.name.localeCompare(projectB.name));
 
-            // Phase 1: Create placeholder nodes for all projects immediately (progressive rendering)
-            const projectPlaceholders = sortedProjects.map((project, index) => {
-                const placeholder = document.createElement("div");
-                placeholder.dataset.projectName = project.name;
-                placeholder.innerHTML = `<div style="display: flex; align-items: center; font-weight: bold; margin-top: 6px; color: #888;">
-                    <span style="display: inline-block; width: 12px; margin-right: 8px; border-style: solid; border-width: 6px 0 6px 6px; border-color: transparent transparent transparent #999;"></span>
-                    ${project.name} <span style="margin-left: 8px; font-size: 0.85em; font-weight: normal;">(loading...)</span>
-                </div>`;
-                tree.appendChild(placeholder);
-                return { project, placeholder, index };
+            // Render all project nodes immediately (PBIs are lazy-loaded on expand)
+            sortedProjects.forEach((project, index) => {
+                const projectNode = renderProjectNode(project, index === 0, false);
+                tree.appendChild(projectNode);
             });
-
-            // Phase 2: Load project details in parallel with throttling (max 3 concurrent requests)
-            const CONCURRENCY_LIMIT = 3;
-            const queue = [...projectPlaceholders];
-            const inFlight = new Set();
-
-            async function processItem({ project, placeholder, index }) {
-                try {
-                    // Render project node without auto-appending to tree
-                    const renderedNode = await renderProjectNode(project, index === 0, false);
-                    // Replace placeholder with the fully rendered node
-                    placeholder.replaceWith(renderedNode);
-                } catch (err) {
-                    console.error(LOG_PREFIX + `Failed to load project ${project.name}:`, err);
-                    placeholder.innerHTML = `<div style="display: flex; align-items: center; font-weight: bold; margin-top: 6px; color: #c00;">
-                        <span style="display: inline-block; width: 12px; margin-right: 8px;">⚠</span>
-                        ${project.name} <span style="margin-left: 8px; font-size: 0.85em; font-weight: normal;">(failed to load)</span>
-                    </div>`;
-                }
-            }
-
-            // Process queue with concurrency limit
-            async function runQueue() {
-                while (queue.length > 0 || inFlight.size > 0) {
-                    // Start new items up to concurrency limit
-                    while (queue.length > 0 && inFlight.size < CONCURRENCY_LIMIT) {
-                        const item = queue.shift();
-                        const promise = processItem(item).finally(() => inFlight.delete(promise));
-                        inFlight.add(promise);
-                    }
-                    // Wait for at least one to complete before continuing
-                    if (inFlight.size > 0) {
-                        await Promise.race(inFlight);
-                    }
-                }
-            }
-
-            await runQueue();
         }
 
         await renderAllProjects();

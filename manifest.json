@@ -3,7 +3,7 @@
     "name": "Kronos-ADO Integration",
     "version": "1.1.0",
     "description": "Integrates Kronos timecard with Azure DevOps task tracking.",
-    "permissions": ["storage"],
+    "permissions": ["storage", "alarms"],
     "content_security_policy": {
         "extension_pages": "script-src 'self'; object-src 'self'"
     },

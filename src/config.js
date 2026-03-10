@@ -8,7 +8,8 @@ export const CONFIG = {
         ORG_URL_RAW: 'adoOrgUrlInputRaw',
         HOURS_BY_DAY: 'kronos_hoursByDay',
         ALLOCATIONS_BY_DAY: 'kronos_allocationsByDay',
-        TASK_TREE_STATE: 'kronos_taskTreeState'
+        TASK_TREE_STATE: 'kronos_taskTreeState',
+        SESSION_KEEP_ALIVE: 'kronos_sessionKeepAlive'
     },
     API_VERSION: '7.0',
     // May 18, 2025 - first Sunday of a pay period (used for payroll period calculations)

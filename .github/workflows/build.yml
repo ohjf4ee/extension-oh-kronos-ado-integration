@@ -9,12 +9,26 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Skip if this is a version bump commit from the bot
+    if: "!contains(github.event.head_commit.message, 'Bump version to')"
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Increment version (push only)
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          current_version=$(grep -oP '"version":\s*"\K[0-9]+\.[0-9]+\.[0-9]+' manifest.json)
+          IFS='.' read -r major minor patch <<< "$current_version"
+          new_patch=$((patch + 1))
+          new_version="${major}.${minor}.${new_patch}"
+          sed -i "s/\"version\": \"$current_version\"/\"version\": \"$new_version\"/" manifest.json
+          echo "Version updated: $current_version -> $new_version"
+
       - name: Stage extension files
         run: |
+          set -euo pipefail
           mkdir -p dist
           cp manifest.json background.js contentScript.js dist/
           cp -r src lib icons dist/
@@ -24,3 +38,17 @@ jobs:
         with:
           name: edge-extension
           path: dist/
+
+      - name: Commit version bump (push only)
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          if git diff --staged --quiet; then
+            echo "No version change to commit"
+          else
+            git commit -m "Bump version to $(grep -oP '\"version\":\s*\"\K[0-9]+\.[0-9]+\.[0-9]+' manifest.json)"
+            git push
+          fi

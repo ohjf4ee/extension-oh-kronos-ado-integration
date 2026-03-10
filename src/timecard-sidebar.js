@@ -42,7 +42,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         configSection: document.getElementById("config-section"),
         consentCheckbox: document.getElementById("consent-checkbox"),
         consentLabel: document.getElementById("consent-label"),
-        clearDataBtn: document.getElementById("clear-data-btn")
+        clearDataBtn: document.getElementById("clear-data-btn"),
+        sessionKeepAliveCheckbox: document.getElementById("session-keep-alive-checkbox"),
+        keepAliveStatus: document.getElementById("keep-alive-status")
     }, {
         onConfigured: (newOrgUrl, newAdoApi) => {
             orgUrl = newOrgUrl;

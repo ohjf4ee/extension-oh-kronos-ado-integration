@@ -322,6 +322,19 @@
                 </div>
                 <div class="status" id="status-msg">No ADO connection set.</div>
                 <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #ccc;">
+                    <div class="config-line" style="margin-bottom: 8px;">
+                        <input type="checkbox" id="session-keep-alive-checkbox" />
+                        <label for="session-keep-alive-checkbox" id="session-keep-alive-label" style="display: inline; margin-top: 0; cursor: pointer;">
+                            Prevent Kronos session timeout
+                        </label>
+                        <span id="keep-alive-status" style="margin-left: 8px; font-size: 0.85em; color: #666;"></span>
+                    </div>
+                    <p style="font-size: 0.8em; color: #666; margin: 4px 0 12px 24px;">
+                        When enabled, sends periodic requests to keep your Kronos session active while the browser is open.
+                        This prevents the 30-minute inactivity timeout that requires MFA re-authentication.
+                    </p>
+                </div>
+                <div style="margin-top: 8px; padding-top: 12px; border-top: 1px solid #ccc;">
                     <button id="clear-data-btn" style="background: #dc3545; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">Clear All Data</button>
                     <span style="margin-left: 8px; font-size: 0.85em; color: #666;">Delete all saved credentials and timecard data</span>
                 </div>

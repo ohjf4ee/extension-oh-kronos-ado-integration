@@ -26,7 +26,9 @@ export function createConfigPanel(elements, dependencies) {
         configSection,
         consentCheckbox,
         consentLabel,
-        clearDataBtn
+        clearDataBtn,
+        sessionKeepAliveCheckbox,
+        keepAliveStatus
     } = elements;
 
     const { onConfigured, showToast } = dependencies;
@@ -46,6 +48,12 @@ export function createConfigPanel(elements, dependencies) {
     // Setup clear data button if present
     if (clearDataBtn) {
         clearDataBtn.addEventListener('click', handleClearData);
+    }
+
+    // Setup session keep-alive toggle if present
+    if (sessionKeepAliveCheckbox) {
+        sessionKeepAliveCheckbox.addEventListener('change', handleSessionKeepAliveToggle);
+        initSessionKeepAliveState();
     }
 
     function updateSaveButtonState() {
@@ -72,11 +80,90 @@ export function createConfigPanel(elements, dependencies) {
             statusMsg.textContent = 'All data cleared.';
             configSection.open = true;
             if (consentCheckbox) consentCheckbox.checked = false;
+            if (sessionKeepAliveCheckbox) {
+                sessionKeepAliveCheckbox.checked = false;
+                // Also disable the alarm
+                chrome.runtime.sendMessage({ action: 'setSessionKeepAlive', enabled: false });
+            }
             updateSaveButtonState();
             if (showToast) showToast('All data cleared successfully', 'success');
         } catch (error) {
             console.error('Failed to clear data:', error);
             if (showToast) showToast('Failed to clear data: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * Initialize session keep-alive checkbox state from storage
+     */
+    async function initSessionKeepAliveState() {
+        const stored = await storage.loadLocal(CONFIG.STORAGE_KEYS.SESSION_KEEP_ALIVE);
+        if (sessionKeepAliveCheckbox) {
+            sessionKeepAliveCheckbox.checked = !!stored;
+        }
+        updateKeepAliveStatusDisplay();
+    }
+
+    /**
+     * Handle session keep-alive toggle change
+     */
+    async function handleSessionKeepAliveToggle() {
+        const enabled = sessionKeepAliveCheckbox.checked;
+
+        // Save preference to storage
+        await storage.saveLocal(CONFIG.STORAGE_KEYS.SESSION_KEEP_ALIVE, enabled);
+
+        // Send message to background script to enable/disable alarm
+        try {
+            const response = await new Promise((resolve) => {
+                chrome.runtime.sendMessage(
+                    { action: 'setSessionKeepAlive', enabled },
+                    resolve
+                );
+            });
+
+            if (response && response.success) {
+                updateKeepAliveStatusDisplay();
+                if (showToast) {
+                    showToast(
+                        enabled ? 'Session keep-alive enabled' : 'Session keep-alive disabled',
+                        'success'
+                    );
+                }
+            } else {
+                throw new Error('Failed to update keep-alive setting');
+            }
+        } catch (error) {
+            console.error('Failed to toggle session keep-alive:', error);
+            // Revert checkbox on error
+            sessionKeepAliveCheckbox.checked = !enabled;
+            await storage.saveLocal(CONFIG.STORAGE_KEYS.SESSION_KEEP_ALIVE, !enabled);
+            if (showToast) showToast('Failed to update setting: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * Update the keep-alive status display text
+     */
+    async function updateKeepAliveStatusDisplay() {
+        if (!keepAliveStatus) return;
+
+        try {
+            const response = await new Promise((resolve) => {
+                chrome.runtime.sendMessage(
+                    { action: 'getSessionKeepAliveStatus' },
+                    resolve
+                );
+            });
+
+            if (response && response.enabled && response.nextScheduledTime) {
+                const nextPing = new Date(response.nextScheduledTime);
+                keepAliveStatus.textContent = `(next ping: ${nextPing.toLocaleTimeString()})`;
+            } else {
+                keepAliveStatus.textContent = '';
+            }
+        } catch (error) {
+            keepAliveStatus.textContent = '';
         }
     }
 
