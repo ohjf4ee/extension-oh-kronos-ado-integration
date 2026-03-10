@@ -37,6 +37,59 @@ export function createTimeGrid(container, dependencies) {
     container.addEventListener('blur', handleBlur, true);   // capture phase for blur
     container.addEventListener('keydown', handleKeydown);
 
+    // ========== Helper Functions ==========
+
+    /**
+     * Get task rows for a specific date from the DOM
+     * @param {string} date - Date string (YYYY-MM-DD)
+     * @returns {Array<{input: HTMLElement, checkbox: HTMLElement}>} - Array of task row items
+     */
+    function getTaskRowsForDate(date) {
+        const dateCell = container.querySelector(`.dateCell[data-date="${date}"]`);
+        if (!dateCell) return [];
+
+        const table = dateCell.closest('table');
+        if (!table) return [];
+
+        const rows = Array.from(table.querySelectorAll('tr'));
+        let dateRowIndex = -1;
+        rows.forEach((row, index) => {
+            if (row.contains(dateCell)) dateRowIndex = index;
+        });
+
+        if (dateRowIndex === -1) return [];
+
+        const items = [];
+        for (let i = dateRowIndex; i < rows.length; i++) {
+            const row = rows[i];
+            const nextDateCell = row.querySelector('.dateCell');
+            if (nextDateCell && nextDateCell !== dateCell) break;
+
+            const hourInput = row.querySelector('.hour-input');
+            const checkbox = row.querySelector('.task-checkbox');
+
+            if (hourInput && checkbox) {
+                items.push({ input: hourInput, checkbox });
+            }
+        }
+        return items;
+    }
+
+    /**
+     * Get checked task items, or all items if none are checked
+     * @param {Array} taskRows - Array of task row items from getTaskRowsForDate
+     * @returns {Array} - Checked items (or all items if none checked)
+     */
+    function getCheckedOrAllItems(taskRows) {
+        const checked = taskRows.filter(item => item.checkbox.checked);
+        if (checked.length === 0) {
+            // If none checked, check all and return all
+            taskRows.forEach(item => { item.checkbox.checked = true; });
+            return taskRows;
+        }
+        return checked;
+    }
+
     // ========== Event Handlers ==========
 
     function handleClick(event) {
@@ -258,7 +311,7 @@ export function createTimeGrid(container, dependencies) {
     function fillHoursForTask(dateString, index) {
         const dailyAllocations = state.allocations[dateString] || [];
         const worked = parseFloat(state.hoursByDay[dateString]?.hours || "0");
-        const allocated = dailyAllocations.reduce((sum, allocation) => sum + (parseFloat(allocation.hours) || 0), 0);
+        const allocated = utils.calculateTotalAllocatedHours(dailyAllocations);
         const difference = allocated - worked;
 
         // If no difference, do nothing (button should be disabled anyway)
@@ -287,7 +340,7 @@ export function createTimeGrid(container, dependencies) {
     function updateDaySummary(dateString) {
         const dailyAllocations = state.allocations[dateString] || [];
         const worked = parseFloat(state.hoursByDay[dateString]?.hours || "0");
-        const allocated = dailyAllocations.reduce((sum, allocation) => sum + (parseFloat(allocation.hours) || 0), 0);
+        const allocated = utils.calculateTotalAllocatedHours(dailyAllocations);
         const difference = allocated - worked;
         const hasDifference = Math.abs(difference) >= 0.01;
 
@@ -394,51 +447,15 @@ export function createTimeGrid(container, dependencies) {
     async function distributeToChecked(date) {
         const dayAllocations = state.allocations[date] || [];
         const worked = parseFloat(state.hoursByDay[date]?.hours || "0");
-        const allocated = dayAllocations.reduce((sum, allocation) => sum + (parseFloat(allocation.hours) || 0), 0);
+        const allocated = utils.calculateTotalAllocatedHours(dayAllocations);
         const diff = allocated - worked;
 
         if (Math.abs(diff) < 0.01) return;
 
-        // Find checkboxes for this date
-        const dateCell = container.querySelector(`.dateCell[data-date="${date}"]`);
-        if (!dateCell) return;
+        const taskRows = getTaskRowsForDate(date);
+        if (taskRows.length === 0) return;
 
-        const table = dateCell.closest('table');
-        const rows = Array.from(table.querySelectorAll('tr'));
-        let dateRowIndex = -1;
-        rows.forEach((row, index) => {
-            if (row.contains(dateCell)) dateRowIndex = index;
-        });
-
-        if (dateRowIndex === -1) return;
-
-        // Collect checkboxes and inputs for this date (in visual DOM order)
-        const items = [];
-        const allItems = [];
-        for (let i = dateRowIndex; i < rows.length; i++) {
-            const row = rows[i];
-            const nextDateCell = row.querySelector('.dateCell');
-            if (nextDateCell && nextDateCell !== dateCell) break;
-
-            const hourInput = row.querySelector('.hour-input');
-            const checkbox = row.querySelector('.task-checkbox');
-
-            if (hourInput && checkbox) {
-                allItems.push({ input: hourInput, checkbox });
-                if (checkbox.checked) {
-                    items.push({ input: hourInput, checkbox });
-                }
-            }
-        }
-
-        // If none checked, check all first
-        if (items.length === 0) {
-            allItems.forEach(item => {
-                item.checkbox.checked = true;
-                items.push({ input: item.input, checkbox: item.checkbox });
-            });
-        }
-
+        const items = getCheckedOrAllItems(taskRows);
         if (items.length === 0) return;
 
         // Items are already in visual DOM order (top to bottom)
@@ -473,52 +490,15 @@ export function createTimeGrid(container, dependencies) {
     async function levelCheckedItems(date) {
         const dayAllocations = state.allocations[date] || [];
         const worked = parseFloat(state.hoursByDay[date]?.hours || "0");
-        const allocated = dayAllocations.reduce((sum, allocation) => sum + (parseFloat(allocation.hours) || 0), 0);
+        const allocated = utils.calculateTotalAllocatedHours(dayAllocations);
         const diff = allocated - worked;
 
         if (Math.abs(diff) < 0.01) return;
 
-        // Find checkboxes for this date
-        const dateCell = container.querySelector(`.dateCell[data-date="${date}"]`);
-        if (!dateCell) return;
+        const taskRows = getTaskRowsForDate(date);
+        if (taskRows.length === 0) return;
 
-        const table = dateCell.closest('table');
-        const rows = Array.from(table.querySelectorAll('tr'));
-        let dateRowIndex = -1;
-        rows.forEach((row, index) => {
-            if (row.contains(dateCell)) dateRowIndex = index;
-        });
-
-        if (dateRowIndex === -1) return;
-
-        // Collect checkboxes and inputs for this date
-        // Collect checkboxes and inputs for this date (in visual DOM order)
-        const items = [];
-        const allItems = [];
-        for (let i = dateRowIndex; i < rows.length; i++) {
-            const row = rows[i];
-            const nextDateCell = row.querySelector('.dateCell');
-            if (nextDateCell && nextDateCell !== dateCell) break;
-
-            const hourInput = row.querySelector('.hour-input');
-            const checkbox = row.querySelector('.task-checkbox');
-
-            if (hourInput && checkbox) {
-                allItems.push({ input: hourInput, checkbox });
-                if (checkbox.checked) {
-                    items.push({ input: hourInput, checkbox });
-                }
-            }
-        }
-
-        // If none checked, check all first
-        if (items.length === 0) {
-            allItems.forEach(item => {
-                item.checkbox.checked = true;
-                items.push({ input: item.input, checkbox: item.checkbox });
-            });
-        }
-
+        const items = getCheckedOrAllItems(taskRows);
         if (items.length === 0) return;
 
         // Items are already in visual DOM order (top to bottom)
@@ -720,7 +700,7 @@ export function createTimeGrid(container, dependencies) {
 
             const worked = parseFloat(state.hoursByDay[dateString]?.hours || "0");
             const dailyAllocations = state.allocations[dateString] || [];
-            const allocated = dailyAllocations.reduce((sum, allocation) => sum + (parseFloat(allocation.hours) || 0), 0);
+            const allocated = utils.calculateTotalAllocatedHours(dailyAllocations);
             const { text: allocationDifferenceText, className: allocationDifferenceClass } = utils.calculateAllocationDifference(allocated, worked);
             const hasDifference = Math.abs(allocated - worked) >= 0.01;
             const fillBtnDisabled = hasDifference ? '' : 'disabled';

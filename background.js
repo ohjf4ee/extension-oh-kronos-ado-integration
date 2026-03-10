@@ -47,11 +47,21 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // Listen for messages from the sidebar to enable/disable keep-alive
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'setSessionKeepAlive') {
-        handleSetSessionKeepAlive(message.enabled).then(sendResponse);
+        handleSetSessionKeepAlive(message.enabled)
+            .then(sendResponse)
+            .catch(err => {
+                console.error(LOG_PREFIX + 'Failed to set session keep-alive:', err);
+                sendResponse({ success: false, error: err.message });
+            });
         return true; // Indicates async response
     }
     if (message.action === 'getSessionKeepAliveStatus') {
-        getKeepAliveStatus().then(sendResponse);
+        getKeepAliveStatus()
+            .then(sendResponse)
+            .catch(err => {
+                console.error(LOG_PREFIX + 'Failed to get keep-alive status:', err);
+                sendResponse({ enabled: false, error: err.message });
+            });
         return true;
     }
 });

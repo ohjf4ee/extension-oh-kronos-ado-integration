@@ -92,6 +92,15 @@ export function getUniqueTaskIdsInPeriod(allocationsByDay, periodStart, periodEn
 }
 
 /**
+ * Calculate total allocated hours from an array of allocations
+ * @param {Array} allocations - Array of allocation objects with 'hours' property
+ * @returns {number} - Sum of hours
+ */
+export function calculateTotalAllocatedHours(allocations) {
+    return allocations.reduce((sum, allocation) => sum + (parseFloat(allocation.hours) || 0), 0);
+}
+
+/**
  * Merge browser allocations with ADO allocations
  * @param {Object} browserAllocations - Local allocations keyed by date
  * @param {Object} adoAllocations - Allocations from ADO keyed by date

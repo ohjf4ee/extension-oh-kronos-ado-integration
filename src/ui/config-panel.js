@@ -83,7 +83,11 @@ export function createConfigPanel(elements, dependencies) {
             if (sessionKeepAliveCheckbox) {
                 sessionKeepAliveCheckbox.checked = false;
                 // Also disable the alarm
-                chrome.runtime.sendMessage({ action: 'setSessionKeepAlive', enabled: false });
+                chrome.runtime.sendMessage({ action: 'setSessionKeepAlive', enabled: false }, () => {
+                    if (chrome.runtime.lastError) {
+                        console.debug('Failed to disable keep-alive alarm:', chrome.runtime.lastError.message);
+                    }
+                });
             }
             updateSaveButtonState();
             if (showToast) showToast('All data cleared successfully', 'success');
@@ -115,10 +119,16 @@ export function createConfigPanel(elements, dependencies) {
 
         // Send message to background script to enable/disable alarm
         try {
-            const response = await new Promise((resolve) => {
+            const response = await new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage(
                     { action: 'setSessionKeepAlive', enabled },
-                    resolve
+                    (response) => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve(response);
+                        }
+                    }
                 );
             });
 
@@ -149,10 +159,16 @@ export function createConfigPanel(elements, dependencies) {
         if (!keepAliveStatus) return;
 
         try {
-            const response = await new Promise((resolve) => {
+            const response = await new Promise((resolve, reject) => {
                 chrome.runtime.sendMessage(
                     { action: 'getSessionKeepAliveStatus' },
-                    resolve
+                    (response) => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve(response);
+                        }
+                    }
                 );
             });
 

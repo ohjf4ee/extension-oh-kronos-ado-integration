@@ -451,6 +451,10 @@ export class AdoApiClient {
             headers: { "Content-Type": "application/json-patch+json", ...authHeader },
             body: JSON.stringify(operations)
         });
+        if (!response.ok) {
+            const body = await response.text().catch(() => "");
+            throw new Error(`Failed to create work item: ${response.status} ${response.statusText}\n${body}`);
+        }
         const data = await response.json();
         return data.id;
     }

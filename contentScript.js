@@ -126,7 +126,11 @@ function calculateKronosTimesFromListView() {
             } else {
                 console.debug(LOG_PREFIX + "Upserted hoursByDay to chrome.storage.local (from List view)");
                 if (changed) {
-                    chrome.runtime.sendMessage({ action: "timecardDataUpdated" });
+                    chrome.runtime.sendMessage({ action: "timecardDataUpdated" }, () => {
+                        if (chrome.runtime.lastError) {
+                            console.debug(LOG_PREFIX + "Message send failed (sidebar may not be ready):", chrome.runtime.lastError.message);
+                        }
+                    });
                 }
             }
         });
@@ -316,7 +320,11 @@ function calculateKronosTimes() {
             } else {
                 console.debug(LOG_PREFIX + "Upserted hoursByDay to chrome.storage.local");
                 if (changed) {
-                    chrome.runtime.sendMessage({ action: "timecardDataUpdated" });
+                    chrome.runtime.sendMessage({ action: "timecardDataUpdated" }, () => {
+                        if (chrome.runtime.lastError) {
+                            console.debug(LOG_PREFIX + "Message send failed (sidebar may not be ready):", chrome.runtime.lastError.message);
+                        }
+                    });
                 }
             }
         });

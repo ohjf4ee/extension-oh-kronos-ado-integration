@@ -290,8 +290,12 @@ export function createTaskTreeSelector(dependencies) {
 
                 async function ensureTasksRendered() {
                     if (taskList.dataset.loaded === '1') return;
-                    const allTasks = (await adoApi.loadTasks(false, showErrorStatus)).filter(task => task.project === project.name && task.parentId === pbi.id);
-                    const tasks = allTasks.length ? allTasks : (await adoApi.loadTasks(false, showErrorStatus)).filter(task => task.project === project.name && task.pbiTitle === pbi.title);
+                    // Load tasks once, then filter twice (by parentId first, fallback to pbiTitle)
+                    const cachedTasks = await adoApi.loadTasks(false, showErrorStatus);
+                    const tasksByParentId = cachedTasks.filter(task => task.project === project.name && task.parentId === pbi.id);
+                    const tasks = tasksByParentId.length > 0
+                        ? tasksByParentId
+                        : cachedTasks.filter(task => task.project === project.name && task.pbiTitle === pbi.title);
                     const taskSortKey = (task) => ({
                         priority: Number(task.priority ?? Infinity),
                         backlog: Number(task.backlogPriority ?? Infinity),
@@ -406,6 +410,9 @@ export function createTaskTreeSelector(dependencies) {
                     ensureTasksRendered().then(() => {
                         const hasTasks = taskList.querySelector('[role="treeitem"]') !== null;
                         setChevron(pbiExpandIcon, hasTasks ? initialPbiExpanded : false, hasTasks);
+                    }).catch(err => {
+                        console.error(LOG_PREFIX + 'Failed to load tasks:', err);
+                        pbiTaskCount.textContent = ' (error)';
                     });
                 }
 
@@ -705,6 +712,10 @@ export function createTaskTreeSelector(dependencies) {
                         pbiList.style.display = 'none';
                         setChevron(projectExpandIcon, false, true);
                     }
+                }).catch(err => {
+                    console.error(LOG_PREFIX + 'Failed to auto-expand project:', err);
+                    pbiList.style.display = 'none';
+                    setChevron(projectExpandIcon, false, true);
                 });
             }
 

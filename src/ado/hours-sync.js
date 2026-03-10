@@ -45,9 +45,9 @@ export async function updateTaskHours({ adoApi, taskId, task, allocations, perio
             currentDate.setDate(periodStart.getDate() + dayIndex);
             const dateString = generalUtils.formatDateAsYYYYMMDD(currentDate);
             const dateDisplayString = `${dateString} ${currentDate.toLocaleDateString(undefined, { weekday: 'short' })}`;
-            const dayHours = (allocations[dateString] || [])
-                .filter(allocation => String(allocation.taskId) === String(taskId))
-                .reduce((sum, allocation) => sum + (parseFloat(allocation.hours) || 0), 0);
+            const taskAllocations = (allocations[dateString] || [])
+                .filter(allocation => String(allocation.taskId) === String(taskId));
+            const dayHours = generalUtils.calculateTotalAllocatedHours(taskAllocations);
 
             const existing = rowsData.find(row => row.date.startsWith(dateString));
             if (existing) {
@@ -87,10 +87,18 @@ export async function updateTaskHours({ adoApi, taskId, task, allocations, perio
         }
 
         // Create or update hours comment
+        let commentResult;
         if (hoursCommentInfo) {
-            await adoApi.updateWorkItemComment(project, taskId, hoursCommentInfo.id, commentText);
+            commentResult = await adoApi.updateWorkItemComment(project, taskId, hoursCommentInfo.id, commentText);
         } else {
-            await adoApi.addWorkItemComment(project, taskId, commentText);
+            commentResult = await adoApi.addWorkItemComment(project, taskId, commentText);
+        }
+
+        if (!commentResult) {
+            // Work item was updated but comment failed - report partial success
+            // The CompletedWork field is correct, but the hours table comment may be stale
+            console.warn(LOG_PREFIX + `Task ${taskId}: CompletedWork updated but comment failed`);
+            return { success: true, runningTotal, warning: "Hours saved but comment update failed" };
         }
 
         return { success: true, runningTotal };
