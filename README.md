@@ -12,7 +12,7 @@ This repo is for a browser extension for a Kronos timecard page. The extension a
   - Create new Tasks under a PBI or Bug
   - Easily close, complete, or mark work items as done
 - **Copy to Clipboard**: Copy the week's hours by Project, PBI/Bug, and Task for pasting into Excel or email
-- **Session Keep-Alive (Optional)**: Prevent Kronos session timeouts while your browser is open
+- **Idle Session Refresh (Optional)**: Auto-refresh the page after inactivity to renew your session
 
 ## Installation
 
@@ -44,24 +44,23 @@ For development/testing:
 
 The sidebar is open by default on the Kronos My Timecard page. You can close or reopen it by clicking the extension icon.
 
-## Session Keep-Alive (Optional)
+## Idle Session Refresh (Optional)
 
 Kronos sessions timeout after 30 minutes of inactivity, requiring users to re-authenticate with MFA. This can be disruptive for users who need quick access to punch in/out throughout the day.
 
-When enabled, this feature sends periodic lightweight requests (every 20 minutes) to keep your Kronos session active while the browser is open. This mirrors the behavior of actively using the Kronos tab.
+When enabled, this feature monitors mouse activity in the sidebar. After 25 minutes of no mouse movement, a countdown popup appears giving you 10 seconds before the page refreshes to renew your session.
 
 **To enable:**
 
 1. Open the sidebar on the Kronos timecard page
 2. Expand the **ADO Org** configuration section
-3. Check **"Prevent Kronos session timeout"**
+3. Check **"Auto-refresh page on idle"**
 
-**Important notes:**
+**Countdown popup options:**
 
-- This is an **opt-in** feature - it is disabled by default
-- It only extends the session while your browser is running
-- If you close your browser or log out of Kronos, you will still need to re-authenticate
-- The feature respects your organization's security policies for idle timeout - it simply keeps the session active as if you were using the page
+- **Cancel** - Dismiss and restart the 25-minute timer
+- **Snooze 1 min** - Delay refresh by 1 minute
+- **Refresh Now** - Refresh immediately
 
 ## Testing
 
@@ -117,7 +116,6 @@ This extension requests minimal permissions required for its functionality:
 | Permission | Justification                                                                                                     |
 |------------|-------------------------------------------------------------------------------------------------------------------|
 | `storage`  | Store user settings (ADO org URL) and timecard data locally in the browser. No data is sent to external servers. |
-| `alarms`   | Schedule periodic keep-alive requests to prevent Kronos session timeout (opt-in feature, disabled by default).   |
 
 ### Content Script Scope
 
@@ -151,7 +149,7 @@ All data is stored in `chrome.storage.local` using the following keys:
 | `kronos_hoursByDay`         | Hours scraped from Kronos, keyed by date                                    |
 | `kronos_allocationsByDay`   | Task hour allocations, keyed by date                                        |
 | `kronos_taskTreeState`      | Expand/collapse state of projects and PBIs in the task tree UI              |
-| `kronos_sessionKeepAlive`   | Boolean flag for session keep-alive preference (opt-in, default false)      |
+| `kronos_sessionKeepAlive`   | Boolean flag for idle refresh preference (opt-in, default false)            |
 
 **Example data structures:**
 
@@ -187,7 +185,6 @@ This extension communicates **only** with:
 
 - **Azure DevOps REST API** (`https://dev.azure.com/{user-configured-org}`) — for task queries and updates
 - **Azure DevOps Identity API** (`https://vssps.dev.azure.com/{user-configured-org}`) — for user authentication validation
-- **Kronos SSO** (`https://stateofohiodas-sso.prd.mykronos.com/sso/ping`) — for session keep-alive pings (only when opt-in feature is enabled)
 
 The extension does **not**:
 

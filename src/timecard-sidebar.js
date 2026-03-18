@@ -43,8 +43,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         consentCheckbox: document.getElementById("consent-checkbox"),
         consentLabel: document.getElementById("consent-label"),
         clearDataBtn: document.getElementById("clear-data-btn"),
-        sessionKeepAliveCheckbox: document.getElementById("session-keep-alive-checkbox"),
-        keepAliveStatus: document.getElementById("keep-alive-status")
+        sessionKeepAliveCheckbox: document.getElementById("session-keep-alive-checkbox")
     }, {
         onConfigured: (newOrgUrl, newAdoApi) => {
             orgUrl = newOrgUrl;

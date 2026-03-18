@@ -8,6 +8,17 @@ import { AdoApiClient, createAdoHeaders, adoUtils } from '../ado/index.js';
 // Privacy policy URL (update this when hosting location is finalized)
 const PRIVACY_POLICY_URL = 'https://github.com/ohjf4ee/extension-oh-kronos-ado-integration/blob/main/PRIVACY.md';
 
+// Idle refresh configuration
+const IDLE_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutes
+const COUNTDOWN_SECONDS = 10;
+const SNOOZE_MS = 60 * 1000; // 1 minute
+
+// Module-level state for idle refresh
+let idleTimeoutId = null;
+let countdownIntervalId = null;
+let idleRefreshEnabled = false;
+let refreshPopupElement = null;
+
 /**
  * Create a config panel controller
  * @param {Object} elements - DOM elements for the config panel
@@ -27,8 +38,7 @@ export function createConfigPanel(elements, dependencies) {
         consentCheckbox,
         consentLabel,
         clearDataBtn,
-        sessionKeepAliveCheckbox,
-        keepAliveStatus
+        sessionKeepAliveCheckbox
     } = elements;
 
     const { onConfigured, showToast } = dependencies;
@@ -50,10 +60,10 @@ export function createConfigPanel(elements, dependencies) {
         clearDataBtn.addEventListener('click', handleClearData);
     }
 
-    // Setup session keep-alive toggle if present
+    // Setup idle refresh toggle if present
     if (sessionKeepAliveCheckbox) {
-        sessionKeepAliveCheckbox.addEventListener('change', handleSessionKeepAliveToggle);
-        initSessionKeepAliveState();
+        sessionKeepAliveCheckbox.addEventListener('change', handleIdleRefreshToggle);
+        initIdleRefreshState();
     }
 
     function updateSaveButtonState() {
@@ -82,12 +92,7 @@ export function createConfigPanel(elements, dependencies) {
             if (consentCheckbox) consentCheckbox.checked = false;
             if (sessionKeepAliveCheckbox) {
                 sessionKeepAliveCheckbox.checked = false;
-                // Also disable the alarm
-                chrome.runtime.sendMessage({ action: 'setSessionKeepAlive', enabled: false }, () => {
-                    if (chrome.runtime.lastError) {
-                        console.debug('Failed to disable keep-alive alarm:', chrome.runtime.lastError.message);
-                    }
-                });
+                stopIdleRefresh();
             }
             updateSaveButtonState();
             if (showToast) showToast('All data cleared successfully', 'success');
@@ -97,90 +102,183 @@ export function createConfigPanel(elements, dependencies) {
         }
     }
 
+    // =========================================================================
+    // Idle Refresh Feature
+    // =========================================================================
+
     /**
-     * Initialize session keep-alive checkbox state from storage
+     * Initialize idle refresh state from storage
      */
-    async function initSessionKeepAliveState() {
+    async function initIdleRefreshState() {
         const stored = await storage.loadLocal(CONFIG.STORAGE_KEYS.SESSION_KEEP_ALIVE);
         if (sessionKeepAliveCheckbox) {
             sessionKeepAliveCheckbox.checked = !!stored;
         }
-        updateKeepAliveStatusDisplay();
+        if (stored) {
+            startIdleRefresh();
+        }
     }
 
     /**
-     * Handle session keep-alive toggle change
+     * Handle idle refresh toggle change
      */
-    async function handleSessionKeepAliveToggle() {
+    async function handleIdleRefreshToggle() {
         const enabled = sessionKeepAliveCheckbox.checked;
-
-        // Save preference to storage
         await storage.saveLocal(CONFIG.STORAGE_KEYS.SESSION_KEEP_ALIVE, enabled);
 
-        // Send message to background script to enable/disable alarm
-        try {
-            const response = await new Promise((resolve, reject) => {
-                chrome.runtime.sendMessage(
-                    { action: 'setSessionKeepAlive', enabled },
-                    (response) => {
-                        if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else {
-                            resolve(response);
-                        }
-                    }
-                );
-            });
-
-            if (response && response.success) {
-                updateKeepAliveStatusDisplay();
-                if (showToast) {
-                    showToast(
-                        enabled ? 'Session keep-alive enabled' : 'Session keep-alive disabled',
-                        'success'
-                    );
-                }
-            } else {
-                throw new Error('Failed to update keep-alive setting');
-            }
-        } catch (error) {
-            console.error('Failed to toggle session keep-alive:', error);
-            // Revert checkbox on error
-            sessionKeepAliveCheckbox.checked = !enabled;
-            await storage.saveLocal(CONFIG.STORAGE_KEYS.SESSION_KEEP_ALIVE, !enabled);
-            if (showToast) showToast('Failed to update setting: ' + error.message, 'error');
+        if (enabled) {
+            startIdleRefresh();
+            if (showToast) showToast('Session refresh enabled', 'success');
+        } else {
+            stopIdleRefresh();
+            if (showToast) showToast('Session refresh disabled', 'success');
         }
     }
 
     /**
-     * Update the keep-alive status display text
+     * Start idle refresh monitoring
      */
-    async function updateKeepAliveStatusDisplay() {
-        if (!keepAliveStatus) return;
+    function startIdleRefresh() {
+        if (idleRefreshEnabled) return;
+        idleRefreshEnabled = true;
 
-        try {
-            const response = await new Promise((resolve, reject) => {
-                chrome.runtime.sendMessage(
-                    { action: 'getSessionKeepAliveStatus' },
-                    (response) => {
-                        if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else {
-                            resolve(response);
-                        }
-                    }
-                );
-            });
+        // Listen for mouse movement to reset idle timer
+        document.addEventListener('mousemove', resetIdleTimer);
 
-            if (response && response.enabled && response.nextScheduledTime) {
-                const nextPing = new Date(response.nextScheduledTime);
-                keepAliveStatus.textContent = `(next ping: ${nextPing.toLocaleTimeString()})`;
-            } else {
-                keepAliveStatus.textContent = '';
-            }
-        } catch (error) {
-            keepAliveStatus.textContent = '';
+        // Start the idle timer
+        resetIdleTimer();
+        console.debug('[config-panel] Idle refresh started (25 min timeout)');
+    }
+
+    /**
+     * Stop idle refresh monitoring
+     */
+    function stopIdleRefresh() {
+        idleRefreshEnabled = false;
+        document.removeEventListener('mousemove', resetIdleTimer);
+        clearTimeout(idleTimeoutId);
+        clearInterval(countdownIntervalId);
+        hideRefreshPopup();
+        console.debug('[config-panel] Idle refresh stopped');
+    }
+
+    /**
+     * Reset the idle timer (called on mouse movement)
+     */
+    function resetIdleTimer() {
+        if (!idleRefreshEnabled) return;
+
+        // Clear any existing timeout
+        clearTimeout(idleTimeoutId);
+        clearInterval(countdownIntervalId);
+        hideRefreshPopup();
+
+        // Set new timeout
+        idleTimeoutId = setTimeout(showRefreshPopup, IDLE_TIMEOUT_MS);
+    }
+
+    /**
+     * Show the refresh countdown popup
+     */
+    function showRefreshPopup() {
+        if (!idleRefreshEnabled) return;
+
+        // Create popup if it doesn't exist
+        if (!refreshPopupElement) {
+            refreshPopupElement = document.createElement('div');
+            refreshPopupElement.id = 'idle-refresh-popup';
+            refreshPopupElement.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                background: #fff3cd;
+                border-bottom: 2px solid #ffc107;
+                padding: 12px 16px;
+                z-index: 9999;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+                font-family: sans-serif;
+            `;
+            document.body.prepend(refreshPopupElement);
         }
+
+        let secondsLeft = COUNTDOWN_SECONDS;
+        updatePopupContent(secondsLeft);
+        refreshPopupElement.style.display = 'block';
+
+        // Start countdown
+        countdownIntervalId = setInterval(() => {
+            secondsLeft--;
+            if (secondsLeft <= 0) {
+                clearInterval(countdownIntervalId);
+                doRefresh();
+            } else {
+                updatePopupContent(secondsLeft);
+            }
+        }, 1000);
+    }
+
+    /**
+     * Update the popup content with current countdown
+     */
+    function updatePopupContent(seconds) {
+        if (!refreshPopupElement) return;
+
+        refreshPopupElement.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                <span style="font-weight: bold; color: #856404;">
+                    Refreshing page to renew session in ${seconds}...
+                </span>
+                <div style="display: flex; gap: 8px;">
+                    <button id="idle-refresh-cancel" style="padding: 4px 12px; cursor: pointer;">Cancel</button>
+                    <button id="idle-refresh-snooze" style="padding: 4px 12px; cursor: pointer;">Snooze 1 min</button>
+                    <button id="idle-refresh-now" style="padding: 4px 12px; cursor: pointer; background: #ffc107; border: 1px solid #e0a800;">Refresh Now</button>
+                </div>
+            </div>
+        `;
+
+        // Attach button handlers
+        document.getElementById('idle-refresh-cancel')?.addEventListener('click', handleCancel);
+        document.getElementById('idle-refresh-snooze')?.addEventListener('click', handleSnooze);
+        document.getElementById('idle-refresh-now')?.addEventListener('click', doRefresh);
+    }
+
+    /**
+     * Hide the refresh popup
+     */
+    function hideRefreshPopup() {
+        if (refreshPopupElement) {
+            refreshPopupElement.style.display = 'none';
+        }
+    }
+
+    /**
+     * Handle cancel button - reset to full 25 minutes
+     */
+    function handleCancel() {
+        clearInterval(countdownIntervalId);
+        hideRefreshPopup();
+        resetIdleTimer();
+    }
+
+    /**
+     * Handle snooze button - add 1 minute
+     */
+    function handleSnooze() {
+        clearInterval(countdownIntervalId);
+        hideRefreshPopup();
+        // Set a shorter timeout for snooze
+        clearTimeout(idleTimeoutId);
+        idleTimeoutId = setTimeout(showRefreshPopup, SNOOZE_MS);
+    }
+
+    /**
+     * Perform the page refresh
+     */
+    function doRefresh() {
+        clearInterval(countdownIntervalId);
+        // Refresh the top-level Kronos page
+        window.top.location.reload();
     }
 
     // Event listeners
