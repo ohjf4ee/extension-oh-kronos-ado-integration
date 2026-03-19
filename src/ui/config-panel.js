@@ -12,12 +12,38 @@ const PRIVACY_POLICY_URL = 'https://github.com/ohjf4ee/extension-oh-kronos-ado-i
 const IDLE_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutes
 const COUNTDOWN_SECONDS = 10;
 const SNOOZE_MS = 60 * 1000; // 1 minute
+const WORKER_TICK_MS = 60 * 1000; // Worker ticks every 1 minute
 
 // Module-level state for idle refresh
-let idleTimeoutId = null;
+let idleWorker = null;
 let countdownIntervalId = null;
 let idleRefreshEnabled = false;
 let refreshPopupElement = null;
+let lastActivityTime = 0;
+let popupShowing = false;
+let snoozeUntil = 0;
+
+/**
+ * Create an inline Web Worker for reliable timing even when tab is inactive.
+ * Web Workers are not throttled by browser background tab restrictions.
+ */
+function createIdleWorker() {
+    const workerCode = `
+        let intervalId = null;
+        self.onmessage = function(e) {
+            if (e.data === 'start') {
+                if (intervalId) clearInterval(intervalId);
+                intervalId = setInterval(() => self.postMessage('tick'), ${WORKER_TICK_MS});
+                self.postMessage('tick'); // Immediate first tick
+            } else if (e.data === 'stop') {
+                if (intervalId) clearInterval(intervalId);
+                intervalId = null;
+            }
+        };
+    `;
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    return new Worker(URL.createObjectURL(blob));
+}
 
 /**
  * Create a config panel controller
@@ -136,18 +162,29 @@ export function createConfigPanel(elements, dependencies) {
     }
 
     /**
-     * Start idle refresh monitoring
+     * Start idle refresh monitoring using Web Worker for reliable background timing
      */
     function startIdleRefresh() {
         if (idleRefreshEnabled) return;
         idleRefreshEnabled = true;
 
+        // Record initial activity time
+        lastActivityTime = Date.now();
+        snoozeUntil = 0;
+        popupShowing = false;
+
         // Listen for mouse movement to reset idle timer
         document.addEventListener('mousemove', resetIdleTimer);
 
-        // Start the idle timer
-        resetIdleTimer();
-        console.debug('[config-panel] Idle refresh started (25 min timeout)');
+        // Listen for visibility changes to check idle time when tab becomes visible
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        // Create and start the Web Worker
+        idleWorker = createIdleWorker();
+        idleWorker.onmessage = handleWorkerTick;
+        idleWorker.postMessage('start');
+
+        console.debug('[config-panel] Idle refresh started (25 min timeout, Web Worker)');
     }
 
     /**
@@ -156,10 +193,58 @@ export function createConfigPanel(elements, dependencies) {
     function stopIdleRefresh() {
         idleRefreshEnabled = false;
         document.removeEventListener('mousemove', resetIdleTimer);
-        clearTimeout(idleTimeoutId);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+
+        if (idleWorker) {
+            idleWorker.postMessage('stop');
+            idleWorker.terminate();
+            idleWorker = null;
+        }
+
         clearInterval(countdownIntervalId);
         hideRefreshPopup();
+        popupShowing = false;
         console.debug('[config-panel] Idle refresh stopped');
+    }
+
+    /**
+     * Handle Web Worker tick - check if idle timeout exceeded
+     */
+    function handleWorkerTick() {
+        if (!idleRefreshEnabled || popupShowing) return;
+        checkIdleTimeout();
+    }
+
+    /**
+     * Handle visibility change - check idle time when tab becomes visible
+     */
+    function handleVisibilityChange() {
+        if (!idleRefreshEnabled || popupShowing) return;
+        if (document.visibilityState === 'visible') {
+            checkIdleTimeout();
+        }
+    }
+
+    /**
+     * Check if idle timeout has been exceeded
+     */
+    function checkIdleTimeout() {
+        const now = Date.now();
+
+        // If snooze is active, check if snooze period has passed
+        if (snoozeUntil > 0) {
+            if (now >= snoozeUntil) {
+                snoozeUntil = 0;
+                showRefreshPopup();
+            }
+            return;
+        }
+
+        // Check normal idle timeout
+        const idleTime = now - lastActivityTime;
+        if (idleTime >= IDLE_TIMEOUT_MS) {
+            showRefreshPopup();
+        }
     }
 
     /**
@@ -168,20 +253,22 @@ export function createConfigPanel(elements, dependencies) {
     function resetIdleTimer() {
         if (!idleRefreshEnabled) return;
 
-        // Clear any existing timeout
-        clearTimeout(idleTimeoutId);
-        clearInterval(countdownIntervalId);
-        hideRefreshPopup();
+        lastActivityTime = Date.now();
+        snoozeUntil = 0;
 
-        // Set new timeout
-        idleTimeoutId = setTimeout(showRefreshPopup, IDLE_TIMEOUT_MS);
+        if (popupShowing) {
+            clearInterval(countdownIntervalId);
+            hideRefreshPopup();
+            popupShowing = false;
+        }
     }
 
     /**
      * Show the refresh countdown popup
      */
     function showRefreshPopup() {
-        if (!idleRefreshEnabled) return;
+        if (!idleRefreshEnabled || popupShowing) return;
+        popupShowing = true;
 
         // Create popup if it doesn't exist
         if (!refreshPopupElement) {
@@ -189,14 +276,15 @@ export function createConfigPanel(elements, dependencies) {
             refreshPopupElement.id = 'idle-refresh-popup';
             refreshPopupElement.style.cssText = `
                 position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
+                top: 10px;
+                left: 10px;
+                right: 10px;
                 background: #fff3cd;
-                border-bottom: 2px solid #ffc107;
-                padding: 12px 16px;
+                border: 3px solid #ffc107;
+                border-radius: 8px;
+                padding: 16px 20px;
                 z-index: 9999;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+                box-shadow: 0 4px 16px rgba(0,0,0,0.25);
                 font-family: sans-serif;
             `;
             document.body.prepend(refreshPopupElement);
@@ -206,7 +294,9 @@ export function createConfigPanel(elements, dependencies) {
         updatePopupContent(secondsLeft);
         refreshPopupElement.style.display = 'block';
 
-        // Start countdown
+        // Start countdown - this still uses setInterval but it's short (10 sec)
+        // and only runs when popup is visible, so throttling is acceptable
+        clearInterval(countdownIntervalId);
         countdownIntervalId = setInterval(() => {
             secondsLeft--;
             if (secondsLeft <= 0) {
@@ -258,18 +348,19 @@ export function createConfigPanel(elements, dependencies) {
     function handleCancel() {
         clearInterval(countdownIntervalId);
         hideRefreshPopup();
-        resetIdleTimer();
+        popupShowing = false;
+        lastActivityTime = Date.now();
+        snoozeUntil = 0;
     }
 
     /**
-     * Handle snooze button - add 1 minute
+     * Handle snooze button - add 1 minute from now
      */
     function handleSnooze() {
         clearInterval(countdownIntervalId);
         hideRefreshPopup();
-        // Set a shorter timeout for snooze
-        clearTimeout(idleTimeoutId);
-        idleTimeoutId = setTimeout(showRefreshPopup, SNOOZE_MS);
+        popupShowing = false;
+        snoozeUntil = Date.now() + SNOOZE_MS;
     }
 
     /**
