@@ -9,7 +9,7 @@ import { AdoApiClient, createAdoHeaders, adoUtils } from '../ado/index.js';
 const PRIVACY_POLICY_URL = 'https://github.com/ohjf4ee/extension-oh-kronos-ado-integration/blob/main/PRIVACY.md';
 
 // Idle refresh configuration
-const IDLE_TIMEOUT_MS = 25 * 60 * 1000; // 25 minutes
+const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const COUNTDOWN_SECONDS = 10;
 const SNOOZE_MS = 60 * 1000; // 1 minute
 const WORKER_TICK_MS = 60 * 1000; // Worker ticks every 1 minute
@@ -184,7 +184,7 @@ export function createConfigPanel(elements, dependencies) {
         idleWorker.onmessage = handleWorkerTick;
         idleWorker.postMessage('start');
 
-        console.debug('[config-panel] Idle refresh started (25 min timeout, Web Worker)');
+        console.debug('[config-panel] Idle refresh started (10 min timeout, Web Worker)');
     }
 
     /**
@@ -343,7 +343,7 @@ export function createConfigPanel(elements, dependencies) {
     }
 
     /**
-     * Handle cancel button - reset to full 25 minutes
+     * Handle cancel button - reset to full 10 minutes
      */
     function handleCancel() {
         clearInterval(countdownIntervalId);

@@ -48,7 +48,7 @@ The sidebar is open by default on the Kronos My Timecard page. You can close or 
 
 Kronos sessions timeout after 30 minutes of inactivity, requiring users to re-authenticate with MFA. This can be disruptive for users who need quick access to punch in/out throughout the day.
 
-When enabled, this feature monitors mouse activity in the sidebar. After 25 minutes of no mouse movement, a countdown popup appears giving you 10 seconds before the page refreshes to renew your session.
+When enabled, this feature monitors mouse activity in the sidebar. After 10 minutes of no mouse movement, a countdown popup appears giving you 10 seconds before the page refreshes to renew your session.
 
 **To enable:**
 
@@ -58,7 +58,7 @@ When enabled, this feature monitors mouse activity in the sidebar. After 25 minu
 
 **Countdown popup options:**
 
-- **Cancel** - Dismiss and restart the 25-minute timer
+- **Cancel** - Dismiss and restart the 10-minute timer
 - **Snooze 1 min** - Delay refresh by 1 minute
 - **Refresh Now** - Refresh immediately
 

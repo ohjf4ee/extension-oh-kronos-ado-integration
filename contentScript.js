@@ -86,7 +86,9 @@ function calculateKronosTimesFromListView() {
         const dailyTotalEl = slat.querySelector(".tk-daily-totals-value");
         let dailyTotal = "0";
         if (dailyTotalEl) {
-            dailyTotal = dailyTotalEl.textContent.trim();
+            // Round to nearest tenth of an hour
+            const rawValue = parseFloat(dailyTotalEl.textContent.trim()) || 0;
+            dailyTotal = roundToDecimalPlaces(rawValue, 1).toString();
         }
 
         // Only include days that have passed (or today)
@@ -255,7 +257,9 @@ function calculateKronosTimes() {
         yesterday.setDate(rowDate.getDate() - 1);
 
         if (rowIndex > 0) {
-            hoursByDay[yesterday.toISOString().slice(0, 10)] = { hours: timesheetRows[rowIndex - 1].dailyTotal };
+            // Round to nearest tenth of an hour
+            const rawHours = parseFloat(timesheetRows[rowIndex - 1].dailyTotal) || 0;
+            hoursByDay[yesterday.toISOString().slice(0, 10)] = { hours: roundToDecimalPlaces(rawHours, 1).toString() };
         }
 
         // If the current date and time is less than the row's date...
