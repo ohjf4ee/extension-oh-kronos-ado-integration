@@ -8,130 +8,6 @@ import { AdoApiClient, createAdoHeaders, adoUtils } from '../ado/index.js';
 // Privacy policy URL (update this when hosting location is finalized)
 const PRIVACY_POLICY_URL = 'https://github.com/ohjf4ee/extension-oh-kronos-ado-integration/blob/main/PRIVACY.md';
 
-// Idle refresh configuration
-const IDLE_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-const COUNTDOWN_SECONDS = 10;
-const SNOOZE_MS = 60 * 1000; // 1 minute
-
-// Module-level state for idle refresh
-let idleWorker = null;
-let countdownIntervalId = null; // For UI updates only (best-effort)
-let idleRefreshEnabled = false;
-let refreshPopupElement = null;
-let popupShowing = false;
-
-/**
- * Create an inline Web Worker for reliable timing even when tab is inactive.
- * Web Workers are not throttled by browser background tab restrictions.
- *
- * The worker handles ALL timing logic:
- * - Tracks last activity time
- * - Detects when idle timeout is exceeded
- * - Counts down to refresh
- * - Triggers refresh when countdown expires
- *
- * This ensures refresh happens even if the main thread is throttled.
- */
-function createIdleWorker() {
-    const workerCode = `
-        const IDLE_TIMEOUT_MS = ${IDLE_TIMEOUT_MS};
-        const COUNTDOWN_MS = ${COUNTDOWN_SECONDS * 1000};
-        const IDLE_TICK_MS = 30000; // Check every 30 sec during idle phase
-        const COUNTDOWN_TICK_MS = 1000; // Check every 1 sec during countdown
-
-        let intervalId = null;
-        let lastActivityTime = 0;
-        let snoozeUntil = 0;
-        let countdownStartTime = 0; // 0 = not in countdown, >0 = countdown started at this time
-
-        function setTickRate(ms) {
-            if (intervalId) clearInterval(intervalId);
-            intervalId = setInterval(tick, ms);
-        }
-
-        self.onmessage = function(e) {
-            if (e.data === 'start') {
-                lastActivityTime = Date.now();
-                snoozeUntil = 0;
-                countdownStartTime = 0;
-                setTickRate(IDLE_TICK_MS);
-            } else if (e.data === 'stop') {
-                if (intervalId) clearInterval(intervalId);
-                intervalId = null;
-                countdownStartTime = 0;
-            } else if (e.data === 'activity') {
-                // User activity detected - reset everything
-                lastActivityTime = Date.now();
-                snoozeUntil = 0;
-                if (countdownStartTime > 0) {
-                    countdownStartTime = 0;
-                    setTickRate(IDLE_TICK_MS);
-                    self.postMessage({ type: 'countdownCancelled' });
-                }
-            } else if (e.data === 'snooze') {
-                // Snooze for 1 minute
-                snoozeUntil = Date.now() + ${SNOOZE_MS};
-                countdownStartTime = 0;
-                setTickRate(IDLE_TICK_MS);
-                self.postMessage({ type: 'countdownCancelled' });
-            } else if (e.data === 'cancel') {
-                // Cancel countdown, reset to full idle timeout
-                lastActivityTime = Date.now();
-                snoozeUntil = 0;
-                countdownStartTime = 0;
-                setTickRate(IDLE_TICK_MS);
-                self.postMessage({ type: 'countdownCancelled' });
-            } else if (e.data === 'refreshNow') {
-                // Immediate refresh requested
-                self.postMessage({ type: 'refresh' });
-            }
-        };
-
-        function tick() {
-            const now = Date.now();
-
-            // If in countdown phase
-            if (countdownStartTime > 0) {
-                const elapsed = now - countdownStartTime;
-                const remaining = Math.ceil((COUNTDOWN_MS - elapsed) / 1000);
-
-                if (remaining <= 0) {
-                    // Countdown finished - trigger refresh
-                    countdownStartTime = 0;
-                    self.postMessage({ type: 'refresh' });
-                } else {
-                    // Send countdown update for UI
-                    self.postMessage({ type: 'countdown', seconds: remaining });
-                }
-                return;
-            }
-
-            // Check if snooze is active
-            if (snoozeUntil > 0) {
-                if (now >= snoozeUntil) {
-                    // Snooze expired - start countdown
-                    snoozeUntil = 0;
-                    countdownStartTime = now;
-                    setTickRate(COUNTDOWN_TICK_MS);
-                    self.postMessage({ type: 'countdownStart', seconds: ${COUNTDOWN_SECONDS} });
-                }
-                return;
-            }
-
-            // Check idle timeout
-            const idleTime = now - lastActivityTime;
-            if (idleTime >= IDLE_TIMEOUT_MS) {
-                // Idle timeout exceeded - start countdown
-                countdownStartTime = now;
-                setTickRate(COUNTDOWN_TICK_MS);
-                self.postMessage({ type: 'countdownStart', seconds: ${COUNTDOWN_SECONDS} });
-            }
-        }
-    `;
-    const blob = new Blob([workerCode], { type: 'application/javascript' });
-    return new Worker(URL.createObjectURL(blob));
-}
-
 /**
  * Create a config panel controller
  * @param {Object} elements - DOM elements for the config panel
@@ -173,10 +49,10 @@ export function createConfigPanel(elements, dependencies) {
         clearDataBtn.addEventListener('click', handleClearData);
     }
 
-    // Setup idle refresh toggle if present
+    // Setup session keep-alive toggle if present
     if (sessionKeepAliveCheckbox) {
-        sessionKeepAliveCheckbox.addEventListener('change', handleIdleRefreshToggle);
-        initIdleRefreshState();
+        sessionKeepAliveCheckbox.addEventListener('change', handleSessionKeepAliveToggle);
+        initSessionKeepAliveState();
     }
 
     function updateSaveButtonState() {
@@ -205,7 +81,6 @@ export function createConfigPanel(elements, dependencies) {
             if (consentCheckbox) consentCheckbox.checked = false;
             if (sessionKeepAliveCheckbox) {
                 sessionKeepAliveCheckbox.checked = false;
-                stopIdleRefresh();
             }
             updateSaveButtonState();
             if (showToast) showToast('All data cleared successfully', 'success');
@@ -216,232 +91,29 @@ export function createConfigPanel(elements, dependencies) {
     }
 
     // =========================================================================
-    // Idle Refresh Feature
+    // Session Keep-Alive Feature
     // =========================================================================
 
     /**
-     * Initialize idle refresh state from storage
+     * Initialize session keep-alive state from storage
      */
-    async function initIdleRefreshState() {
+    async function initSessionKeepAliveState() {
         const stored = await storage.loadLocal(CONFIG.STORAGE_KEYS.SESSION_KEEP_ALIVE);
         if (sessionKeepAliveCheckbox) {
             sessionKeepAliveCheckbox.checked = !!stored;
         }
-        if (stored) {
-            startIdleRefresh();
-        }
     }
 
     /**
-     * Handle idle refresh toggle change
+     * Handle session keep-alive toggle change
      */
-    async function handleIdleRefreshToggle() {
+    async function handleSessionKeepAliveToggle() {
         const enabled = sessionKeepAliveCheckbox.checked;
         await storage.saveLocal(CONFIG.STORAGE_KEYS.SESSION_KEEP_ALIVE, enabled);
 
-        if (enabled) {
-            startIdleRefresh();
-            if (showToast) showToast('Session refresh enabled', 'success');
-        } else {
-            stopIdleRefresh();
-            if (showToast) showToast('Session refresh disabled', 'success');
+        if (showToast) {
+            showToast(enabled ? 'Session keep-alive enabled' : 'Session keep-alive disabled', 'success');
         }
-    }
-
-    /**
-     * Start idle refresh monitoring using Web Worker for reliable background timing.
-     * The worker handles ALL timing logic to ensure refresh happens even when
-     * the main thread is throttled by background tab restrictions.
-     */
-    function startIdleRefresh() {
-        if (idleRefreshEnabled) return;
-        idleRefreshEnabled = true;
-        popupShowing = false;
-
-        // Listen for mouse movement to notify worker of activity
-        document.addEventListener('mousemove', notifyActivity);
-        document.addEventListener('keydown', notifyActivity);
-
-        // Create and start the Web Worker
-        idleWorker = createIdleWorker();
-        idleWorker.onmessage = handleWorkerMessage;
-        idleWorker.postMessage('start');
-
-        console.debug('[config-panel] Idle refresh started (10 min timeout, Web Worker controls timing)');
-    }
-
-    /**
-     * Stop idle refresh monitoring
-     */
-    function stopIdleRefresh() {
-        idleRefreshEnabled = false;
-        document.removeEventListener('mousemove', notifyActivity);
-        document.removeEventListener('keydown', notifyActivity);
-
-        if (idleWorker) {
-            idleWorker.postMessage('stop');
-            idleWorker.terminate();
-            idleWorker = null;
-        }
-
-        clearInterval(countdownIntervalId);
-        hideRefreshPopup();
-        popupShowing = false;
-        console.debug('[config-panel] Idle refresh stopped');
-    }
-
-    /**
-     * Handle messages from the Web Worker.
-     * The worker sends: countdownStart, countdown, countdownCancelled, refresh
-     */
-    function handleWorkerMessage(e) {
-        if (!idleRefreshEnabled) return;
-
-        const msg = e.data;
-
-        if (msg.type === 'countdownStart') {
-            // Worker detected idle timeout - show popup
-            showRefreshPopup(msg.seconds);
-        } else if (msg.type === 'countdown') {
-            // Worker sent countdown update - update UI (best effort)
-            updatePopupContent(msg.seconds);
-        } else if (msg.type === 'countdownCancelled') {
-            // Worker cancelled countdown (due to activity, snooze, or cancel)
-            hideRefreshPopup();
-            popupShowing = false;
-            clearInterval(countdownIntervalId);
-        } else if (msg.type === 'refresh') {
-            // Worker says it's time to refresh - do it immediately
-            doRefresh();
-        }
-    }
-
-    /**
-     * Notify the worker of user activity (mouse movement, keypress)
-     */
-    function notifyActivity() {
-        if (!idleRefreshEnabled || !idleWorker) return;
-        idleWorker.postMessage('activity');
-    }
-
-    /**
-     * Show the refresh countdown popup.
-     * The popup is purely for UI - the worker controls the actual timing.
-     */
-    function showRefreshPopup(seconds) {
-        if (!idleRefreshEnabled) return;
-        popupShowing = true;
-
-        // Create popup if it doesn't exist
-        if (!refreshPopupElement) {
-            refreshPopupElement = document.createElement('div');
-            refreshPopupElement.id = 'idle-refresh-popup';
-            refreshPopupElement.style.cssText = `
-                position: fixed;
-                top: 10px;
-                left: 10px;
-                right: 10px;
-                background: #fff3cd;
-                border: 3px solid #ffc107;
-                border-radius: 8px;
-                padding: 16px 20px;
-                z-index: 9999;
-                box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-                font-family: sans-serif;
-            `;
-            document.body.prepend(refreshPopupElement);
-        }
-
-        updatePopupContent(seconds);
-        refreshPopupElement.style.display = 'block';
-
-        // Also start a local interval for smoother UI updates when tab is visible.
-        // This is best-effort only - the worker will trigger refresh regardless.
-        clearInterval(countdownIntervalId);
-        let localSeconds = seconds;
-        countdownIntervalId = setInterval(() => {
-            localSeconds--;
-            if (localSeconds > 0) {
-                updatePopupContent(localSeconds);
-            }
-            // Don't trigger refresh here - let the worker do it
-        }, 1000);
-    }
-
-    /**
-     * Update the popup content with current countdown
-     */
-    function updatePopupContent(seconds) {
-        if (!refreshPopupElement) return;
-
-        refreshPopupElement.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-                <span style="font-weight: bold; color: #856404;">
-                    Refreshing page to renew session in ${seconds}...
-                </span>
-                <div style="display: flex; gap: 8px;">
-                    <button id="idle-refresh-cancel" style="padding: 4px 12px; cursor: pointer;">Cancel</button>
-                    <button id="idle-refresh-snooze" style="padding: 4px 12px; cursor: pointer;">Snooze 1 min</button>
-                    <button id="idle-refresh-now" style="padding: 4px 12px; cursor: pointer; background: #ffc107; border: 1px solid #e0a800;">Refresh Now</button>
-                </div>
-            </div>
-        `;
-
-        // Attach button handlers - these tell the worker what to do
-        document.getElementById('idle-refresh-cancel')?.addEventListener('click', handleCancel);
-        document.getElementById('idle-refresh-snooze')?.addEventListener('click', handleSnooze);
-        document.getElementById('idle-refresh-now')?.addEventListener('click', handleRefreshNow);
-    }
-
-    /**
-     * Hide the refresh popup
-     */
-    function hideRefreshPopup() {
-        if (refreshPopupElement) {
-            refreshPopupElement.style.display = 'none';
-        }
-    }
-
-    /**
-     * Handle cancel button - tell worker to reset to full 10 minutes
-     */
-    function handleCancel() {
-        clearInterval(countdownIntervalId);
-        hideRefreshPopup();
-        popupShowing = false;
-        if (idleWorker) {
-            idleWorker.postMessage('cancel');
-        }
-    }
-
-    /**
-     * Handle snooze button - tell worker to snooze for 1 minute
-     */
-    function handleSnooze() {
-        clearInterval(countdownIntervalId);
-        hideRefreshPopup();
-        popupShowing = false;
-        if (idleWorker) {
-            idleWorker.postMessage('snooze');
-        }
-    }
-
-    /**
-     * Handle refresh now button - tell worker to refresh immediately
-     */
-    function handleRefreshNow() {
-        if (idleWorker) {
-            idleWorker.postMessage('refreshNow');
-        }
-    }
-
-    /**
-     * Perform the page refresh
-     */
-    function doRefresh() {
-        clearInterval(countdownIntervalId);
-        // Refresh the top-level Kronos page
-        window.top.location.reload();
     }
 
     // Event listeners

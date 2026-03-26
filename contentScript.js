@@ -2,6 +2,154 @@
 
 const LOG_PREFIX = "\x1B[1mEXTENSION Kronos-ADO-integration[contentScript.js]:\x1B[m ";
 
+// Session keep-alive: proactive Auth0 session extension
+// Based on analysis of UKG/Kronos Auth0 session management system
+let sessionKeepAliveObserver = null;
+let sessionKeepAliveIntervalId = null;
+
+// Timing constants (based on Auth0 session config analysis)
+const SESSION_CHECK_INTERVAL_MS = 60 * 1000;        // Check every 1 minute
+const MAX_IDLE_BEFORE_EXTEND_MS = 20 * 60 * 1000;   // Extend if idle 20+ min (before 27-min popup threshold)
+
+/**
+ * Get the current Auth0 session state from localStorage.
+ * The session data is stored under ngStorage-AUTH0_SESSION_<clientId>
+ */
+function getAuth0SessionState() {
+    try {
+        const clientIdRaw = localStorage.getItem('ngStorage-AUTH0_SESSION_CLIENT_ID');
+        if (!clientIdRaw) return null;
+        const clientId = JSON.parse(clientIdRaw);
+        const sessionData = localStorage.getItem('ngStorage-' + clientId);
+        if (!sessionData) return null;
+        return JSON.parse(sessionData);
+    } catch (e) {
+        console.debug(LOG_PREFIX + "Could not read Auth0 session state:", e.message);
+        return null;
+    }
+}
+
+/**
+ * Inject a script into the page to call auth0StackService.extendSession().
+ * This must be injected because the Angular service lives in the page's JS context,
+ * not the content script's isolated world.
+ */
+function injectExtendSession() {
+    const script = document.createElement('script');
+    script.textContent = `
+        (function() {
+            try {
+                var injector = angular.element(document.body).injector();
+                var svc = injector.get('auth0StackService');
+                if (svc && !svc.isExtending()) {
+                    console.log('[Kronos-ADO Extension] Proactively extending session...');
+                    svc.extendSession();
+                }
+            } catch(e) {
+                console.warn('[Kronos-ADO Extension] Could not extend session:', e.message);
+            }
+        })();
+    `;
+    document.head.appendChild(script);
+    script.remove();
+}
+
+/**
+ * Check if session needs extending and do so proactively.
+ * This runs every minute and extends the session before the popup would appear.
+ */
+function checkAndExtendSession() {
+    const state = getAuth0SessionState();
+    if (!state) return;
+
+    const now = Date.now();
+    const idleMs = now - state.lastAuth0CallTime;
+    const idleMinutes = Math.round(idleMs / 60000);
+
+    if (idleMs >= MAX_IDLE_BEFORE_EXTEND_MS && !state.isExtending) {
+        console.log(LOG_PREFIX + `Session idle for ${idleMinutes} minutes - proactively extending`);
+        injectExtendSession();
+    }
+}
+
+/**
+ * Fallback: watch for the popup and click Continue if it appears.
+ * This handles edge cases where proactive extension didn't fire.
+ */
+function dismissSessionPopupIfPresent() {
+    // Look for the Auth0 session timeout modal
+    const confirmBtn = document.querySelector('.auth0-modal-popup .btn-primary');
+    if (confirmBtn) {
+        console.log(LOG_PREFIX + "Session timeout popup detected - clicking Continue");
+        confirmBtn.click();
+        return;
+    }
+
+    // Fallback: look for any popup with "Are you still there?" text and a Continue button
+    const allText = document.body.innerText || '';
+    if (!allText.includes('Are you still there?')) return;
+
+    const buttons = document.querySelectorAll('button');
+    for (const button of buttons) {
+        const buttonText = button.textContent?.trim();
+        if (buttonText === 'Continue') {
+            console.log(LOG_PREFIX + "Session timeout popup detected (fallback) - clicking Continue");
+            button.click();
+            return;
+        }
+    }
+}
+
+function startSessionKeepAlive() {
+    if (sessionKeepAliveObserver) return;
+
+    // Start proactive session extension check every minute
+    checkAndExtendSession(); // Check immediately
+    sessionKeepAliveIntervalId = setInterval(checkAndExtendSession, SESSION_CHECK_INTERVAL_MS);
+
+    // Also watch for the popup as a fallback (MutationObserver)
+    sessionKeepAliveObserver = new MutationObserver(() => {
+        dismissSessionPopupIfPresent();
+    });
+    sessionKeepAliveObserver.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+
+    console.debug(LOG_PREFIX + "Session keep-alive started (proactive extension at 20 min, popup fallback)");
+}
+
+function stopSessionKeepAlive() {
+    if (sessionKeepAliveIntervalId) {
+        clearInterval(sessionKeepAliveIntervalId);
+        sessionKeepAliveIntervalId = null;
+    }
+    if (sessionKeepAliveObserver) {
+        sessionKeepAliveObserver.disconnect();
+        sessionKeepAliveObserver = null;
+    }
+    console.debug(LOG_PREFIX + "Session keep-alive stopped");
+}
+
+function initSessionKeepAlive() {
+    // Check storage for the keep-alive setting
+    chrome.storage.local.get('kronos_sessionKeepAlive', (result) => {
+        if (result.kronos_sessionKeepAlive) {
+            startSessionKeepAlive();
+        }
+    });
+
+    // Listen for changes to the setting
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && 'kronos_sessionKeepAlive' in changes) {
+            if (changes.kronos_sessionKeepAlive.newValue) {
+                startSessionKeepAlive();
+            } else {
+                stopSessionKeepAlive();
+            }
+        }
+    });
+}
 
 function isInListView() {
     // If "Table view" button is visible, we're in List view
@@ -486,6 +634,7 @@ function toggleSidebar() {
 if (window.self === window.top) {
     initializeFrames();
     toggleSidebar();
+    initSessionKeepAlive();
 } else {
     startTimecardLogic();
 }
