@@ -331,6 +331,7 @@ function calculateKronosTimes() {
     let dayIndex = -1;
     let previousRow = { Date: "" };
     let cumulativeTotalForWeek1 = 0;
+    let cumulativeTotalForWeek1_raw = 0;
 
     function calculateRowMetrics(row) {
         // Do calculations for the row
@@ -338,13 +339,18 @@ function calculateKronosTimes() {
         row.expectedHoursFor40HourWeek =
             cumulativeExpectedHoursFor80HourPeriod[dayIndex] - 40 <= 0 ? cumulativeExpectedHoursFor80HourPeriod[dayIndex] : cumulativeExpectedHoursFor80HourPeriod[dayIndex] - 40;
         row.actualHoursFor80HourPeriod = parseFloat(row.periodRunningTotal || 0);
+        // _raw = unrounded hundredths from Kronos; _raw feeds targetOut math so tenths-rounding
+        // doesn't eat up to 0.05 hr (3 min) of precision. Rounded values stay for display.
         if (dayIndex <= 6) {
+            row.actualHoursFor40HourWeek_raw = row.actualHoursFor80HourPeriod;
             row.actualHoursFor40HourWeek = roundToDecimalPlaces(row.actualHoursFor80HourPeriod, 1);
         }
         if (dayIndex == 6) {
+            cumulativeTotalForWeek1_raw = row.actualHoursFor40HourWeek_raw;
             cumulativeTotalForWeek1 = row.actualHoursFor40HourWeek;
         }
         if (dayIndex >= 7) {
+            row.actualHoursFor40HourWeek_raw = parseFloat(row.periodRunningTotal || 0) - cumulativeTotalForWeek1_raw;
             row.actualHoursFor40HourWeek = roundToDecimalPlaces(parseFloat(row.periodRunningTotal || 0) - cumulativeTotalForWeek1, 1);
         }
 
@@ -416,26 +422,46 @@ function calculateKronosTimes() {
             timesheetRows = timesheetRows.slice(0, rowIndex);
             // Isolate yesterday's Year Month Day
             let yesterdayYMD = yesterday.toString().slice(0, yesterday.toString().indexOf(":") - 2);
-            // Get the last punch time and convert it into a date-time
+            // Target-out math biases every sub-minute ambiguity in the direction that protects the user
+            // from landing under 40 hours for the week. Three sources of error, all ceilinged:
+            //   1. Kronos displays punch-in to the minute but stores seconds. A displayed "7:30 AM" could
+            //      really be 7:30:59. We advance lastPunchDate by 59s in the punch-in branch so the math
+            //      treats it as the latest possible real moment. (The "punch in now" branch uses the real
+            //      current time at second precision and doesn't need the bump.)
+            //   2. periodRunningTotal is hundredths-precision from Kronos. We use the *_raw* (unrounded)
+            //      value for hoursNeededForToday; the tenths-rounded actualHoursFor40HourWeek stays for
+            //      display (formattedDifferenceFor40HourWeek) but would eat up to 0.05 hr (3 min) here.
+            //   3. We ceil targetOut up to the next whole minute before formatting, because the user's
+            //      actual clock-out lands somewhere in :00-:59 of the displayed minute.
+            // If shortfalls reappear despite the three ceilings, add a +60s buffer to lastPunchDate (or
+            // equivalently before the ceil step). See plans/yes-i-want-you-merry-cloud.md.
             let lastPunch;
             let basedOn;
+            let applyPunchInSecondBump;
             if (timesheetRows[rowIndex - 1].outPunch === "") {
                 lastPunch = timesheetRows[rowIndex - 1].inPunch;
                 lastPunch = lastPunch.replace(" ", "").slice(0, -2) + " " + lastPunch.slice(-2);
                 basedOn = "based on last punch in time";
+                applyPunchInSecondBump = true;
             } else {
                 lastPunch = new Date().toTimeString().slice(0, 5);
                 basedOn = "if you punch in now";
+                applyPunchInSecondBump = false;
             }
             let lastPunchDate = new Date(yesterdayYMD + lastPunch);
-            // Determine the number of hours needed for today
-            let hoursNeededForToday = timesheetRows[rowIndex - 1].expectedHoursFor40HourWeek - timesheetRows[rowIndex - 1].actualHoursFor40HourWeek;
+            if (applyPunchInSecondBump) {
+                lastPunchDate = new Date(lastPunchDate.getTime() + 59 * 1000);
+            }
+            let hoursNeededForToday =
+                timesheetRows[rowIndex - 1].expectedHoursFor40HourWeek -
+                timesheetRows[rowIndex - 1].actualHoursFor40HourWeek_raw;
             hoursNeededForToday = hoursNeededForToday < 0 ? 0 : hoursNeededForToday;
-            // Use that number to determine the target out time for today
-            let targetOut = addHoursToDate(lastPunchDate, hoursNeededForToday);
-            targetOut = targetOut.toLocaleString();
-            targetOut = targetOut.slice(targetOut.indexOf(" ") + 1).split(/[: ]/);
-            targetOut = targetOut[0] + ":" + targetOut[1] + " " + targetOut[3];
+            let targetOutDate = addHoursToDate(lastPunchDate, hoursNeededForToday);
+            if (targetOutDate.getSeconds() !== 0 || targetOutDate.getMilliseconds() !== 0) {
+                const remainder = targetOutDate.getSeconds() * 1000 + targetOutDate.getMilliseconds();
+                targetOutDate = new Date(targetOutDate.getTime() + (60_000 - remainder));
+            }
+            let targetOut = targetOutDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
             timesheetRows[rowIndex - 1].targetOut = targetOut;
             // Create a corresponding message and display it
             const divForMessage = document.createElement("div");

@@ -1,6 +1,6 @@
 {
   "name": "extension-kronos-ado-integration",
-  "version": "1.0.0",
+  "version": "1.2.7",
   "scripts": {
     "test": "echo \"No tests\""
   }
