@@ -290,12 +290,8 @@ export function createTaskTreeSelector(dependencies) {
 
                 async function ensureTasksRendered() {
                     if (taskList.dataset.loaded === '1') return;
-                    // Load tasks once, then filter twice (by parentId first, fallback to pbiTitle)
                     const cachedTasks = await adoApi.loadTasks(false, showErrorStatus);
-                    const tasksByParentId = cachedTasks.filter(task => task.project === project.name && task.parentId === pbi.id);
-                    const tasks = tasksByParentId.length > 0
-                        ? tasksByParentId
-                        : cachedTasks.filter(task => task.project === project.name && task.pbiTitle === pbi.title);
+                    const tasks = cachedTasks.filter(task => task.project === project.name && task.parentId === pbi.id);
                     const taskSortKey = (task) => ({
                         priority: Number(task.priority ?? Infinity),
                         backlog: Number(task.backlogPriority ?? Infinity),

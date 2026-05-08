@@ -134,6 +134,7 @@ export class AdoApiClient {
                 title: task.title,
                 project: parentMap[task.parentId]?.project || task.project,
                 pbiTitle: parentMap[task.parentId]?.title || "(No PBI)",
+                parentId: task.parentId,
                 priority: task.priority,
                 backlogPriority: task.backlogPriority,
             }));
