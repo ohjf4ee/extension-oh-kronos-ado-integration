@@ -12,7 +12,7 @@ This repo is for a browser extension for a Kronos timecard page. The extension a
   - Create new Tasks under a PBI or Bug
   - Easily close, complete, or mark work items as done
 - **Copy to Clipboard**: Copy the week's hours by Project, PBI/Bug, and Task for pasting into Excel or email
-- **Idle Session Refresh (Optional)**: Auto-refresh the page after inactivity to renew your session
+- **Session Keep-Alive (Optional)**: Periodically extends your Kronos session in the background so you don't get logged out and have to re-authenticate with MFA mid-day
 
 ## Installation
 
@@ -44,23 +44,29 @@ For development/testing:
 
 The sidebar is open by default on the Kronos My Timecard page. You can close or reopen it by clicking the extension icon.
 
-## Idle Session Refresh (Optional)
+## Session Keep-Alive (Optional)
 
-Kronos sessions timeout after 30 minutes of inactivity, requiring users to re-authenticate with MFA. This can be disruptive for users who need quick access to punch in/out throughout the day.
-
-When enabled, this feature monitors mouse activity in the sidebar. After 10 minutes of no mouse movement, a countdown popup appears giving you 10 seconds before the page refreshes to renew your session.
+Kronos sessions expire after about 30 minutes of inactivity, requiring re-authentication with MFA. When enabled, this feature calls Auth0's silent session-renewal flow on a one-minute timer (from both the in-tab content script and the extension's service worker), so the session stays alive even when the tab has been backgrounded for hours.
 
 **To enable:**
 
 1. Open the sidebar on the Kronos timecard page
 2. Expand the **ADO Org** configuration section
-3. Check **"Auto-refresh page on idle"**
+3. Check **"Auto-dismiss session timeout popup"**
 
-**Countdown popup options:**
+### Required Edge setting
 
-- **Cancel** - Dismiss and restart the 10-minute timer
-- **Snooze 1 min** - Delay refresh by 1 minute
-- **Refresh Now** - Refresh immediately
+Microsoft Edge by default aggressively suspends backgrounded tabs **and the extension's service worker along with them** as a power-saving measure. When this happens, no keep-alive timer — neither this extension's nor Auth0's own internal one — gets to run, and the session expires regardless. To make the feature work reliably in Edge:
+
+1. Open `edge://settings/system` (or **Settings → System and performance → Performance**)
+2. Under **"Always keep these sites active"**, click **Add site**
+3. Enter `https://stateofohiodas-sso.prd.mykronos.com` and save
+
+Once the host is on that allowlist, both the extension's timers and Auth0's own renewal loop keep running in the background and the session is maintained indefinitely.
+
+### Diagnostic log
+
+For troubleshooting, click **"Export keep-alive log"** in the sidebar config section. It copies a JSON log of the most recent ~500 timer ticks, session-extension attempts, and Auth0 responses — useful if you ever need to investigate why a session expired. **"Clear log"** resets the buffer for a fresh capture.
 
 ## Testing
 
@@ -71,8 +77,9 @@ Run `npm test` before committing. The current script simply prints `"No tests"`.
 ```text
 Extension-Kronos-ADO-integration/
 ├── manifest.json           # Chrome extension manifest (v3)
-├── background.js           # Service worker for extension actions
-├── contentScript.js        # Injected into Kronos pages
+├── background.js           # Service worker (action button + keep-alive alarm)
+├── contentScript.js        # Injected into Kronos pages (isolated world)
+├── mainWorldExtender.js    # Injected into Kronos page main world (keep-alive)
 ├── package.json            # npm configuration
 ├── README.md               # This file
 ├── CLAUDE.md               # Claude Code instructions
@@ -113,9 +120,15 @@ Extension-Kronos-ADO-integration/
 
 This extension requests minimal permissions required for its functionality:
 
-| Permission | Justification                                                                                                     |
-|------------|-------------------------------------------------------------------------------------------------------------------|
-| `storage`  | Store user settings (ADO org URL) and timecard data locally in the browser. No data is sent to external servers. |
+| Permission  | Justification                                                                                                     |
+|-------------|-------------------------------------------------------------------------------------------------------------------|
+| `storage`   | Store user settings (ADO org URL) and timecard data locally in the browser. No data is sent to external servers. |
+| `alarms`    | Wake the service worker on a one-minute schedule for the session keep-alive feature.                              |
+| `scripting` | Inject session-extension code into the Kronos page from the service worker when the in-tab timer is suspended.   |
+
+### Host Permissions
+
+`https://stateofohiodas-sso.prd.mykronos.com/*` is required so the service worker can inject session-extension code into the Kronos tab. Same origin as the content-script match below.
 
 ### Content Script Scope
 
@@ -149,7 +162,8 @@ All data is stored in `chrome.storage.local` using the following keys:
 | `kronos_hoursByDay`         | Hours scraped from Kronos, keyed by date                                    |
 | `kronos_allocationsByDay`   | Task hour allocations, keyed by date                                        |
 | `kronos_taskTreeState`      | Expand/collapse state of projects and PBIs in the task tree UI              |
-| `kronos_sessionKeepAlive`   | Boolean flag for idle refresh preference (opt-in, default false)            |
+| `kronos_sessionKeepAlive`   | Boolean flag for the session keep-alive feature (opt-in, default false)     |
+| `kronos_keepAliveLog`       | Diagnostic ring buffer (last 500 entries) of keep-alive timer activity      |
 
 **Example data structures:**
 

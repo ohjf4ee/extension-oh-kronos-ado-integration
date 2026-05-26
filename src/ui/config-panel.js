@@ -55,6 +55,16 @@ export function createConfigPanel(elements, dependencies) {
         initSessionKeepAliveState();
     }
 
+    // Diagnostic log buttons for the keep-alive feature
+    const exportKeepAliveLogBtn = document.getElementById('export-keep-alive-log-btn');
+    if (exportKeepAliveLogBtn) {
+        exportKeepAliveLogBtn.addEventListener('click', handleExportKeepAliveLog);
+    }
+    const clearKeepAliveLogBtn = document.getElementById('clear-keep-alive-log-btn');
+    if (clearKeepAliveLogBtn) {
+        clearKeepAliveLogBtn.addEventListener('click', handleClearKeepAliveLog);
+    }
+
     function updateSaveButtonState() {
         const orgUrl = adoUtils.extractOrgUrl(orgUrlInput.value.trim());
         const pat = patInput.value.trim();
@@ -113,6 +123,86 @@ export function createConfigPanel(elements, dependencies) {
 
         if (showToast) {
             showToast(enabled ? 'Session keep-alive enabled' : 'Session keep-alive disabled', 'success');
+        }
+    }
+
+    async function handleExportKeepAliveLog() {
+        const status = document.getElementById('export-keep-alive-log-status');
+        const result = await new Promise((resolve) => {
+            chrome.storage.local.get('kronos_keepAliveLog', resolve);
+        });
+        const log = Array.isArray(result.kronos_keepAliveLog) ? result.kronos_keepAliveLog : [];
+        const text = JSON.stringify(log, null, 2);
+        const count = log.length;
+
+        // Try clipboard API first (fails inside Kronos's iframe due to its
+        // permissions policy). Fall back to execCommand, then to a textarea
+        // the user can manually select+copy.
+        try {
+            await navigator.clipboard.writeText(text);
+            const msg = `Copied ${count} entries to clipboard.`;
+            if (status) status.textContent = msg;
+            if (showToast) showToast(msg, 'success');
+            return;
+        } catch (_) { /* fall through */ }
+
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            if (ok) {
+                const msg = `Copied ${count} entries to clipboard (fallback).`;
+                if (status) status.textContent = msg;
+                if (showToast) showToast(msg, 'success');
+                return;
+            }
+        } catch (_) { /* fall through */ }
+
+        // Last resort: render the JSON in a visible textarea for manual copy.
+        showLogTextarea(text, count, status);
+    }
+
+    function showLogTextarea(text, count, status) {
+        let host = document.getElementById('keep-alive-log-textarea-host');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'keep-alive-log-textarea-host';
+            host.style.cssText = 'margin: 8px 0 0 24px;';
+            const btn = document.getElementById('export-keep-alive-log-btn');
+            if (btn && btn.parentNode) btn.parentNode.appendChild(host);
+        }
+        host.innerHTML = '';
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size: 0.8em; color: #666; margin-bottom: 4px;';
+        hint.textContent = `Clipboard blocked by Kronos's iframe policy. Click in the box, then Ctrl+A, Ctrl+C to copy all ${count} entries.`;
+        host.appendChild(hint);
+        const ta = document.createElement('textarea');
+        ta.readOnly = true;
+        ta.value = text;
+        ta.style.cssText = 'width: 100%; height: 200px; font-family: monospace; font-size: 11px;';
+        ta.addEventListener('focus', () => ta.select());
+        host.appendChild(ta);
+        ta.focus();
+        if (status) status.textContent = `${count} entries shown for manual copy.`;
+    }
+
+    async function handleClearKeepAliveLog() {
+        const status = document.getElementById('export-keep-alive-log-status');
+        try {
+            await new Promise((resolve) => {
+                chrome.storage.local.set({ kronos_keepAliveLog: [] }, resolve);
+            });
+            if (status) status.textContent = 'Log cleared.';
+            if (showToast) showToast('Keep-alive log cleared', 'success');
+        } catch (e) {
+            const msg = 'Clear failed: ' + e.message;
+            if (status) status.textContent = msg;
+            if (showToast) showToast(msg, 'error');
         }
     }
 

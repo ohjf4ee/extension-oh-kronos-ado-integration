@@ -11,6 +11,43 @@ let sessionKeepAliveIntervalId = null;
 const SESSION_CHECK_INTERVAL_MS = 60 * 1000;        // Check every 1 minute
 const MAX_IDLE_BEFORE_EXTEND_MS = 20 * 60 * 1000;   // Extend if idle 20+ min (before 27-min popup threshold)
 
+// Diagnostic ring buffer. Emits each event to console (filter [KEEPALIVE])
+// and to chrome.storage.local at KEEPALIVE_LOG_KEY (last MAX_LOG_ENTRIES
+// entries). Exported via the "Export keep-alive log" button in the sidebar.
+const KEEPALIVE_LOG_KEY = 'kronos_keepAliveLog';
+const MAX_LOG_ENTRIES = 500;
+const FRAME_ROLE = (window === window.top) ? 'top' : 'iframe';
+let lastTickTs = 0;
+
+function keepAliveLog(event, data) {
+    const entry = {
+        ts: new Date().toISOString(),
+        frame: FRAME_ROLE,
+        url: location.href.slice(0, 200),
+        event,
+        data: data || {}
+    };
+    console.log('[KEEPALIVE]', entry);
+    try {
+        chrome.storage.local.get(KEEPALIVE_LOG_KEY, (r) => {
+            const log = Array.isArray(r[KEEPALIVE_LOG_KEY]) ? r[KEEPALIVE_LOG_KEY] : [];
+            log.push(entry);
+            while (log.length > MAX_LOG_ENTRIES) log.shift();
+            chrome.storage.local.set({ [KEEPALIVE_LOG_KEY]: log });
+        });
+    } catch (e) {
+        // Extension context invalidated (e.g. reload). Console line still ran.
+    }
+}
+
+// Receive postMessages from the injected extendSession script so we can see
+// whether it reached Angular, found the service, and called extendSession.
+window.addEventListener('message', (e) => {
+    if (e.source !== window) return;
+    if (!e.data || e.data.type !== '__KRONOS_KA__') return;
+    keepAliveLog('inject-msg', { stage: e.data.stage, error: e.data.error });
+});
+
 /**
  * Get the current Auth0 session state from localStorage.
  * The session data is stored under ngStorage-AUTH0_SESSION_<clientId>
@@ -35,23 +72,10 @@ function getAuth0SessionState() {
  * not the content script's isolated world.
  */
 function injectExtendSession() {
-    const script = document.createElement('script');
-    script.textContent = `
-        (function() {
-            try {
-                var injector = angular.element(document.body).injector();
-                var svc = injector.get('auth0StackService');
-                if (svc && !svc.isExtending()) {
-                    console.log('[Kronos-ADO Extension] Proactively extending session...');
-                    svc.extendSession();
-                }
-            } catch(e) {
-                console.warn('[Kronos-ADO Extension] Could not extend session:', e.message);
-            }
-        })();
-    `;
-    document.head.appendChild(script);
-    script.remove();
+    // Delegate to the MAIN-world content script (mainWorldExtender.js), which
+    // has direct access to the page's `angular` global. It replies via a
+    // __KRONOS_KA__ message that our existing listener (below) picks up.
+    window.postMessage({ type: '__KRONOS_KA_REQ__' }, '*');
 }
 
 /**
@@ -59,14 +83,31 @@ function injectExtendSession() {
  * This runs every minute and extends the session before the popup would appear.
  */
 function checkAndExtendSession() {
-    const state = getAuth0SessionState();
-    if (!state) return;
-
     const now = Date.now();
+    const sinceLastTickMs = lastTickTs ? (now - lastTickTs) : null;
+    lastTickTs = now;
+
+    const state = getAuth0SessionState();
+    if (!state) {
+        keepAliveLog('tick-no-state', { sinceLastTickMs });
+        return;
+    }
+
     const idleMs = now - state.lastAuth0CallTime;
     const idleMinutes = Math.round(idleMs / 60000);
+    const willExtend = idleMs >= MAX_IDLE_BEFORE_EXTEND_MS && !state.isExtending;
 
-    if (idleMs >= MAX_IDLE_BEFORE_EXTEND_MS && !state.isExtending) {
+    keepAliveLog('tick', {
+        sinceLastTickMs,
+        idleMinutes,
+        isExtending: state.isExtending,
+        willExtend,
+        lastAuth0CallTime: new Date(state.lastAuth0CallTime).toISOString(),
+        lastActivityTime: state.lastActivityTime ? new Date(state.lastActivityTime).toISOString() : null,
+        documentHidden: document.hidden
+    });
+
+    if (willExtend) {
         console.log(LOG_PREFIX + `Session idle for ${idleMinutes} minutes - proactively extending`);
         injectExtendSession();
     }
@@ -81,6 +122,7 @@ function dismissSessionPopupIfPresent() {
     const confirmBtn = document.querySelector('.auth0-modal-popup .btn-primary');
     if (confirmBtn) {
         console.log(LOG_PREFIX + "Session timeout popup detected - clicking Continue");
+        keepAliveLog('popup-click', { selector: 'primary' });
         confirmBtn.click();
         return;
     }
@@ -94,14 +136,18 @@ function dismissSessionPopupIfPresent() {
         const buttonText = button.textContent?.trim();
         if (buttonText === 'Continue') {
             console.log(LOG_PREFIX + "Session timeout popup detected (fallback) - clicking Continue");
+            keepAliveLog('popup-click', { selector: 'fallback' });
             button.click();
             return;
         }
     }
+    // Found the prompt text but couldn't locate a Continue button - selector drift.
+    keepAliveLog('popup-text-no-btn', {});
 }
 
 function startSessionKeepAlive() {
     if (sessionKeepAliveObserver) return;
+    keepAliveLog('start', {});
 
     // Start proactive session extension check every minute
     checkAndExtendSession(); // Check immediately
@@ -128,12 +174,26 @@ function stopSessionKeepAlive() {
         sessionKeepAliveObserver.disconnect();
         sessionKeepAliveObserver = null;
     }
+    keepAliveLog('stop', {});
     console.debug(LOG_PREFIX + "Session keep-alive stopped");
 }
 
 function initSessionKeepAlive() {
+    keepAliveLog('load', {});
+
+    // Track visibility transitions - background tabs can throttle setInterval.
+    document.addEventListener('visibilitychange', () => {
+        keepAliveLog('visibility', { hidden: document.hidden });
+    });
+
+    // Note when the frame is about to unload (navigation, close, reload).
+    window.addEventListener('pagehide', () => {
+        keepAliveLog('pagehide', {});
+    });
+
     // Check storage for the keep-alive setting
     chrome.storage.local.get('kronos_sessionKeepAlive', (result) => {
+        keepAliveLog('init', { flag: !!result.kronos_sessionKeepAlive });
         if (result.kronos_sessionKeepAlive) {
             startSessionKeepAlive();
         }
@@ -142,6 +202,7 @@ function initSessionKeepAlive() {
     // Listen for changes to the setting
     chrome.storage.onChanged.addListener((changes, area) => {
         if (area === 'local' && 'kronos_sessionKeepAlive' in changes) {
+            keepAliveLog('flag-change', { newValue: !!changes.kronos_sessionKeepAlive.newValue });
             if (changes.kronos_sessionKeepAlive.newValue) {
                 startSessionKeepAlive();
             } else {
@@ -149,6 +210,7 @@ function initSessionKeepAlive() {
             }
         }
     });
+
 }
 
 function isInListView() {
