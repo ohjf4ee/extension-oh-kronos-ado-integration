@@ -121,15 +121,25 @@ export async function updateTaskHours({ adoApi, taskId, task, allocations, perio
 export async function syncAllocationsWithAdo({ adoApi, allocations, periodOffset, tasksCache }) {
     try {
         const { periodStart, periodEnd } = generalUtils.getCurrentPeriodRange(CONFIG.PAYROLL_FIRST_DAY, periodOffset);
-        const taskIds = generalUtils.getUniqueTaskIdsInPeriod(allocations, periodStart, periodEnd);
+        const localTaskIds = generalUtils.getUniqueTaskIdsInPeriod(allocations, periodStart, periodEnd);
 
-        if (taskIds.length === 0) {
+        // Discover tasks assigned to me that were changed on or after the period start.
+        // This catches tasks whose hours were manually edited in ADO but not yet on the local timecard.
+        const discovered = adoApi ? await adoApi.findRecentHoursComments(periodStart) : [];
+        const discoveredById = new Map(discovered.map(d => [String(d.taskId), d]));
+
+        // Union of local task IDs and discovered task IDs
+        const allTaskIds = Array.from(new Set([...localTaskIds, ...discovered.map(d => String(d.taskId))]));
+
+        if (allTaskIds.length === 0) {
             return { allocations, success: true };
         }
 
-        // Fetch task details in parallel
-        const taskDetailsPromises = taskIds.map(id => adoApi.loadTaskDetails(id, true));
-        const allTaskDetails = await Promise.all(taskDetailsPromises);
+        // Fetch task details for tasks not already covered by discovery (discovery already has commentText)
+        const taskIdsNeedingDetails = allTaskIds.filter(id => !discoveredById.has(id) || !discoveredById.get(id).project);
+        const taskDetailsPromises = taskIdsNeedingDetails.map(id => adoApi.loadTaskDetails(id, true));
+        const fetchedDetails = await Promise.all(taskDetailsPromises);
+        const detailsById = new Map(taskIdsNeedingDetails.map((id, i) => [id, fetchedDetails[i]]));
 
         // Build ADO allocations from task comments (or descriptions for unmigrated tasks)
         const adoAllocations = {};
@@ -139,23 +149,33 @@ export async function syncAllocationsWithAdo({ adoApi, allocations, periodOffset
             adoAllocations[generalUtils.formatDateAsYYYYMMDD(loopDate)] = [];
         }
 
-        for (let i = 0; i < taskIds.length; i++) {
-            const taskId = taskIds[i];
-            const taskDetails = allTaskDetails[i];
-            if (!taskDetails) continue;
+        for (const taskId of allTaskIds) {
+            const discoveredEntry = discoveredById.get(taskId);
+            let dailyHours;
 
-            // Cache task info
-            if (tasksCache) {
-                tasksCache[taskId] = taskDetails;
+            if (discoveredEntry) {
+                // Reuse the commentText already fetched during discovery — no extra round-trip
+                dailyHours = adoUtils.extractDailyHoursFromHtml(discoveredEntry.commentText, taskId);
+
+                // Cache task info using project from discovery
+                if (tasksCache && !tasksCache[taskId]) {
+                    tasksCache[taskId] = { project: discoveredEntry.project };
+                }
+            } else {
+                const taskDetails = detailsById.get(taskId);
+                if (!taskDetails) continue;
+
+                if (tasksCache) {
+                    tasksCache[taskId] = taskDetails;
+                }
+
+                dailyHours = await extractDailyHoursFromTask({
+                    adoApi,
+                    taskId,
+                    project: taskDetails.project,
+                    description: taskDetails.description
+                });
             }
-
-            // Try to get hours from comment first, fall back to description
-            const dailyHours = await extractDailyHoursFromTask({
-                adoApi,
-                taskId,
-                project: taskDetails.project,
-                description: taskDetails.description
-            });
 
             for (const [dateStr, hours] of Object.entries(dailyHours)) {
                 const entryDate = new Date(dateStr + 'T00:00:00');
@@ -238,7 +258,8 @@ export async function recoverAllocationsFromAdo({ adoApi, daysBack = 14 }) {
 
     try {
         // Find all tasks with hours-tracking comments
-        const tasksWithComments = await adoApi.findRecentHoursComments(daysBack);
+        const sinceDate = new Date(Date.now() - daysBack * 86400000);
+        const tasksWithComments = await adoApi.findRecentHoursComments(sinceDate);
 
         if (tasksWithComments.length === 0) {
             console.debug(LOG_PREFIX + "No tasks with hours comments found for recovery");

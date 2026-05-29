@@ -733,22 +733,26 @@ export class AdoApiClient {
      * @param {number} daysBack - How many days to search back (default 14 = one pay period)
      * @returns {Promise<Array<{taskId: number, project: string, commentText: string}>>}
      */
-    async findRecentHoursComments(daysBack = 14) {
+    async findRecentHoursComments(sinceDate) {
         const auth = await this._getAuthenticationHeaders();
         if (!auth) {
             console.warn(this.logPrefix + "Missing auth for findRecentHoursComments");
             return [];
         }
 
+        // Default to 14 days ago if no date provided
+        const since = sinceDate instanceof Date ? sinceDate : new Date(Date.now() - 14 * 86400000);
+        const sinceDateStr = since.toISOString().slice(0, 10);
+
         try {
-            // Query tasks assigned to me that were changed within the lookback period.
+            // Query tasks assigned to me that were changed on or after the period start.
             // We include Done tasks because hours may have been logged before completion.
             const workItemQuery = `
                 SELECT [System.Id], [System.Title], [System.TeamProject]
                 FROM WorkItems
                 WHERE [System.WorkItemType] = 'Task'
                 AND [System.AssignedTo] = @Me
-                AND [System.ChangedDate] >= @Today - ${daysBack}
+                AND [System.ChangedDate] >= '${sinceDateStr}'
                 ORDER BY [System.ChangedDate] DESC`;
 
             const response = await fetch(`${this.orgUrl}/_apis/wit/wiql?api-version=7.0`, {
@@ -767,12 +771,16 @@ export class AdoApiClient {
 
             const data = await response.json();
             if (!data.workItems?.length) {
-                console.debug(`${this.logPrefix}No tasks found in last ${daysBack} days`);
+                console.debug(`${this.logPrefix}No tasks found changed since ${sinceDateStr}`);
                 return [];
             }
 
-            // Limit to first 50 tasks to avoid excessive API calls
-            const taskIds = data.workItems.map(wi => wi.id).slice(0, 50);
+            const MAX_TASKS = 500;
+            const allMatchedIds = data.workItems.map(wi => wi.id);
+            if (allMatchedIds.length >= MAX_TASKS) {
+                console.warn(`${this.logPrefix}Task discovery hit the ${MAX_TASKS}-task cap (${allMatchedIds.length} matched); some tasks may be missed`);
+            }
+            const taskIds = allMatchedIds.slice(0, MAX_TASKS);
             console.debug(`${this.logPrefix}Found ${taskIds.length} tasks to check for hours comments`);
 
             // Fetch basic details for all tasks (we need project name for comment API)

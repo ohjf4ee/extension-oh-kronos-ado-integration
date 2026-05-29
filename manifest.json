@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Kronos-ADO Integration",
-    "version": "1.2.12",
+    "version": "1.2.13",
     "description": "Integrates Kronos timecard with Azure DevOps task tracking.",
     "permissions": ["storage", "alarms", "scripting"],
     "host_permissions": ["https://stateofohiodas-sso.prd.mykronos.com/*"],
