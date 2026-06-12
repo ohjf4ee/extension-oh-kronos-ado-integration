@@ -24,10 +24,54 @@ export function extractOrgName(url) {
 }
 
 /**
- * Regex to match the hours tracking table by its structure (Date | Hours | Total headers)
+ * Regex to match the hours tracking table by its header structure.
+ * The Day and Notes header cells are optional so both formats match:
+ *   3-col (legacy): Date | Hours | Total
+ *   5-col:          Date | Day | Hours | Notes | Total
  * Used to identify hours tables in both descriptions (legacy) and comments (new)
  */
-export const HOURS_TABLE_REGEX = /<table[\s\S]*?>\s*<tr><th style="[\s\S]*?">Date<\/th><th style="[\s\S]*?">Hours<\/th><th style="[\s\S]*?">Total<\/th><\/tr>[\s\S]*?<\/table>/;
+export const HOURS_TABLE_REGEX = /<table[\s\S]*?>\s*<tr><th style="[\s\S]*?">Date<\/th>(?:<th style="[\s\S]*?">Day<\/th>)?<th style="[\s\S]*?">Hours<\/th>(?:<th style="[\s\S]*?">Notes<\/th>)?<th style="[\s\S]*?">Total<\/th><\/tr>[\s\S]*?<\/table>/;
+
+/** Short English day names indexed by Date.getDay() (fixed, locale-independent) */
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/**
+ * Short day name (Mon/Tue/...) for a date string starting with YYYY-MM-DD.
+ * Parses and reads in UTC so the calendar date maps to the same day name regardless of the
+ * host machine's timezone (dates here are US Eastern calendar dates, not instants).
+ * @param {string} dateStr
+ * @returns {string} - Three-letter day name, or "" if unparseable
+ */
+export function dayOfWeekShort(dateStr) {
+    const match = String(dateStr).match(/\d{4}-\d{2}-\d{2}/);
+    if (!match) return '';
+    const date = new Date(match[0] + 'T00:00:00Z');
+    return Number.isNaN(date.getTime()) ? '' : DAY_NAMES[date.getUTCDay()];
+}
+
+/**
+ * Escape text for safe embedding in an HTML table cell (used for Notes)
+ * @param {string} text
+ * @returns {string}
+ */
+export function escapeHtml(text) {
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/**
+ * Check whether a parsed hours table is the 5-col format (Date | Day | Hours | Notes | Total)
+ * @param {Element} tableElement - DOM element containing the table
+ * @returns {boolean}
+ */
+function isFiveColumnTable(tableElement) {
+    const headers = Array.from(tableElement.querySelectorAll('th')).map(th => th.textContent.trim());
+    return headers.includes('Day') && headers.includes('Notes');
+}
 
 /**
  * Check if HTML content contains an hours tracking table
@@ -88,6 +132,9 @@ export function extractDailyHoursFromHtml(html, taskId) {
         const tempElement = document.createElement('div');
         tempElement.innerHTML = tableMatch[0];
 
+        // 5-col: Date | Day | Hours | Notes | Total — hours in cell 2; 3-col legacy: cell 1
+        const hoursCellIndex = isFiveColumnTable(tempElement) ? 2 : 1;
+
         const rows = tempElement.querySelectorAll('tr');
         console.debug(LOG_PREFIX + `Task ${taskId} found ${rows.length} table rows`);
 
@@ -97,9 +144,9 @@ export function extractDailyHoursFromHtml(html, taskId) {
             const tableCells = tableRow.querySelectorAll('td');
             console.debug(LOG_PREFIX + `Task ${taskId} row ${rowIndex} has ${tableCells.length} cells`);
 
-            if (tableCells.length >= 2) {
+            if (tableCells.length > hoursCellIndex) {
                 const dateText = tableCells[0].textContent.trim();
-                const hoursValue = parseFloat(tableCells[1].textContent.trim()) || 0;
+                const hoursValue = parseFloat(tableCells[hoursCellIndex].textContent.trim()) || 0;
 
                 console.debug(LOG_PREFIX + `Task ${taskId} row ${rowIndex}: date="${dateText}", hours=${hoursValue}`);
 
@@ -118,8 +165,10 @@ export function extractDailyHoursFromHtml(html, taskId) {
 }
 
 /**
- * Build hours table HTML for ADO comment/description
- * @param {Array} rowsData - Array of {date: string, hours: number} objects
+ * Build the 5-col hours table HTML (Date | Day | Hours | Notes | Total) for ADO comment.
+ * Always emits the 5-col format; the date cell is normalized to pure YYYY-MM-DD (legacy
+ * combined "2026-06-09 Mon" inputs are accepted — the day moves to its own column).
+ * @param {Array} rowsData - Array of {date: string, hours: number, notes?: string} objects
  * @returns {{tableHtml: string, runningTotal: number}} - HTML table string and running total
  */
 export function buildHoursTableHtml(rowsData) {
@@ -127,15 +176,21 @@ export function buildHoursTableHtml(rowsData) {
     let rows = "";
 
     rowsData.forEach(rowData => {
+        const dateMatch = String(rowData.date).match(/\d{4}-\d{2}-\d{2}/);
+        const date = dateMatch ? dateMatch[0] : String(rowData.date);
         running += rowData.hours;
-        rows += `<tr><td style="border:1px solid;padding:.2em">${rowData.date}</td>` +
+        rows += `<tr><td style="border:1px solid;padding:.2em">${date}</td>` +
+            `<td style="border:1px solid;padding:.2em;text-align: center;">${dayOfWeekShort(date)}</td>` +
             `<td style="border:1px solid;padding:.2em;text-align: center;">${rowData.hours.toFixed(1)}</td>` +
+            `<td style="border:1px solid;padding:.2em">${escapeHtml(rowData.notes || '')}</td>` +
             `<td style="border:1px solid;padding:.2em;text-align: center;">${running.toFixed(1)}</td></tr>`;
     });
 
     const tableHtml = `<table style="border-collapse:collapse;">` +
         `<tr><th style="border:1px solid;padding:.2em;text-align: left;">Date</th>` +
+        `<th style="border:1px solid;padding:.2em;text-align: center;">Day</th>` +
         `<th style="border:1px solid;padding:.2em;text-align: center;">Hours</th>` +
+        `<th style="border:1px solid;padding:.2em;text-align: left;">Notes</th>` +
         `<th style="border:1px solid;padding:.2em;text-align: center;">Total</th></tr>` +
         `${rows}</table>`;
 
@@ -143,9 +198,10 @@ export function buildHoursTableHtml(rowsData) {
 }
 
 /**
- * Parse existing hours table rows from HTML
+ * Parse existing hours table rows from HTML (handles both 3-col and 5-col formats)
  * @param {string} html - HTML containing hours table
- * @returns {Array} - Array of {date: string, hours: number} objects
+ * @returns {Array} - Array of {date: string, day: string, hours: number, notes: string};
+ *   date is normalized to YYYY-MM-DD, day always populated (derived when absent)
  */
 export function parseHoursTableRows(html) {
     const rowsData = [];
@@ -155,13 +211,31 @@ export function parseHoursTableRows(html) {
     const temp = document.createElement('div');
     temp.innerHTML = html.match(HOURS_TABLE_REGEX)[0];
 
+    const fiveCol = isFiveColumnTable(temp);
+
     temp.querySelectorAll('tr').forEach((tr, idx) => {
         if (idx === 0) return; // Skip header
         const tds = tr.querySelectorAll('td');
-        if (tds.length >= 2) {
+        if (tds.length < 2) return;
+
+        const dateMatch = tds[0].textContent.trim().match(/(\d{4}-\d{2}-\d{2})/);
+        if (!dateMatch) return;
+        const date = dateMatch[1];
+
+        if (fiveCol && tds.length >= 5) {
             rowsData.push({
-                date: tds[0].textContent.trim(),
-                hours: parseFloat(tds[1].textContent.trim()) || 0
+                date,
+                day: tds[1].textContent.trim() || dayOfWeekShort(date),
+                hours: parseFloat(tds[2].textContent.trim()) || 0,
+                notes: tds[3].textContent.trim()
+            });
+        } else {
+            // 3-col legacy: Date | Hours | Total (day may be embedded in the date cell)
+            rowsData.push({
+                date,
+                day: dayOfWeekShort(date),
+                hours: parseFloat(tds[1].textContent.trim()) || 0,
+                notes: ''
             });
         }
     });

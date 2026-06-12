@@ -8,7 +8,10 @@ import * as generalUtils from '../utils.js';
 const LOG_PREFIX = "\x1B[1mEXTENSION Kronos-ADO-integration[ado/hours-sync.js]:\x1B[m ";
 
 /**
- * Update task hours in ADO - writes hours table to comment and updates CompletedWork field
+ * Update task hours in ADO - writes 5-col hours table (Date | Day | Hours | Notes | Total)
+ * to a comment and updates the CompletedWork field.
+ * Existing rows carry their notes value through unchanged; new rows created by this
+ * function get an empty notes string.
  * @param {Object} params - Parameters object
  * @param {Object} params.adoApi - AdoApiClient instance
  * @param {string|number} params.taskId - Task ID to update
@@ -38,13 +41,12 @@ export async function updateTaskHours({ adoApi, taskId, task, allocations, perio
         const sourceHtml = hoursCommentInfo ? hoursCommentInfo.comment.text : description;
         let rowsData = adoUtils.parseHoursTableRows(sourceHtml);
 
-        // Update with current period's data
+        // Merge current period's allocations into rowsData
         const { periodStart } = generalUtils.getCurrentPeriodRange(CONFIG.PAYROLL_FIRST_DAY, periodOffset);
         for (let dayIndex = 0; dayIndex < 7; dayIndex++) {
             const currentDate = new Date(periodStart);
             currentDate.setDate(periodStart.getDate() + dayIndex);
             const dateString = generalUtils.formatDateAsYYYYMMDD(currentDate);
-            const dateDisplayString = `${dateString} ${currentDate.toLocaleDateString(undefined, { weekday: 'short' })}`;
             const taskAllocations = (allocations[dateString] || [])
                 .filter(allocation => String(allocation.taskId) === String(taskId));
             const dayHours = generalUtils.calculateTotalAllocatedHours(taskAllocations);
@@ -53,7 +55,7 @@ export async function updateTaskHours({ adoApi, taskId, task, allocations, perio
             if (existing) {
                 existing.hours = dayHours;
             } else if (dayHours !== 0) {
-                rowsData.push({ date: dateDisplayString, hours: dayHours });
+                rowsData.push({ date: dateString, hours: dayHours, notes: '' });
             }
         }
 
@@ -65,6 +67,14 @@ export async function updateTaskHours({ adoApi, taskId, task, allocations, perio
 
         // Build comment text with warning note
         const commentText = `${CONFIG.HOURS_COMMENT_NOTE}<br><br>${tableHtml}`;
+
+        // ADO work item comments are long text fields capped at 1M characters; with the Notes
+        // column the table grows fast enough that the cap is worth watching
+        const MAX_COMMENT_CHARS = 1048576;
+        if (commentText.length > MAX_COMMENT_CHARS * 0.8) {
+            console.warn(LOG_PREFIX + `Task ${taskId}: hours comment is ${commentText.length} chars ` +
+                `(${Math.round(commentText.length / MAX_COMMENT_CHARS * 100)}% of ADO's 1M-char comment limit)`);
+        }
 
         // Build PATCH operations for CompletedWork field
         const ops = [
